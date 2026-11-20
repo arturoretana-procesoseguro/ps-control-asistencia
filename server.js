@@ -8,6 +8,7 @@ const { hashPassword } = require('./src/util');
 const dispositivos = require('./src/dispositivos');
 const api = require('./src/api');
 const zkSync = require('./src/zk-sync');
+const odooSync = require('./src/odoo-sync');
 
 seed(hashPassword);
 
@@ -35,4 +36,5 @@ app.listen(PORT, () => {
   console.log(`  ZKTeco (ADMS):    servidor <ip>  puerto ${PORT}`);
   console.log(`  Hikvision:        http://<servidor>:${PORT}/hikvision/<token>`);
   zkSync.iniciarProgramador();
+  odooSync.iniciarProgramador();
 });

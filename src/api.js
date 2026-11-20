@@ -9,6 +9,7 @@ const { calcularAsistencia, resumen } = require('./reporte');
 const { interpretar } = require('./importar');
 const { nuevoToken } = require('./dispositivos');
 const zkSync = require('./zk-sync');
+const odooSync = require('./odoo-sync');
 
 const FOTOS_DIR = path.join(DATA_DIR, 'fotos');
 fs.mkdirSync(FOTOS_DIR, { recursive: true });
@@ -195,7 +196,7 @@ api.post('/dispositivos', soloAdmin, wrap((req, res) => {
   res.json({ id: Number(r.lastInsertRowid) });
 }));
 api.put('/dispositivos/:id', soloAdmin, wrap((req, res) => {
-  const sets = ['nombre', 'serie', 'sede_id', 'estado', 'ip_lectura', 'puerto'].filter((c) => c in req.body);
+  const sets = ['nombre', 'serie', 'sede_id', 'estado', 'ip_lectura', 'puerto', 'enviar_altas'].filter((c) => c in req.body);
   if (sets.length) db.prepare(`UPDATE dispositivos SET ${sets.map((c) => c + '=?').join(',')} WHERE id = ?`)
     .run(...sets.map((c) => nn(req.body[c])), Number(req.params.id));
   if (req.body.regenerar_token) db.prepare("UPDATE dispositivos SET token = ? WHERE id = ? AND marca='hikvision'").run(nuevoToken(), Number(req.params.id));
@@ -219,6 +220,13 @@ api.delete('/dispositivos/:id', soloAdmin, wrap((req, res) => {
   db.prepare('DELETE FROM dispositivos WHERE id = ?').run(Number(req.params.id));
   res.json({ ok: true });
 }));
+
+// ---------- Odoo ----------
+api.get('/odoo', soloAdmin, wrap((req, res) => res.json(odooSync.getConfig())));
+api.put('/odoo', soloAdmin, wrap((req, res) => { odooSync.setConfig(req.body || {}); res.json(odooSync.getConfig()); }));
+api.post('/odoo/probar', soloAdmin, wrapAsync(async (req, res) => res.json(await odooSync.probar())));
+api.post('/odoo/sincronizar', soloAdmin, wrapAsync(async (req, res) => res.json(await odooSync.sincronizarTodo())));
+api.post('/odoo/vincular', soloAdmin, wrapAsync(async (req, res) => res.json(await odooSync.vincular(req.body.empleado_id, req.body.odoo_id))));
 
 // ---------- Usuarios ----------
 api.get('/usuarios', soloAdmin, wrap((req, res) => res.json(db.prepare(

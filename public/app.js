@@ -246,7 +246,7 @@ views.dispositivos = { title: 'Checadores', async render(el) {
     ${list.length ? `<div class="table-wrap" style="margin-bottom:16px"><table><thead><tr><th>Nombre</th><th>Marca</th><th>Serie</th><th>Sede</th><th>Estado</th><th>IP</th><th>Último contacto</th><th class="num">Registros</th><th></th></tr></thead><tbody>
     ${list.map((d) => `<tr><td><b>${esc(d.nombre)}</b></td><td>${d.marca === 'zkteco' ? 'ZKTeco' : 'Hikvision'}</td><td class="mono">${esc(d.serie || '')}</td>
       <td>${esc(d.sede || '')}</td><td>${d.estado === 'activo' ? '<span class="badge ok">Activo</span>' : d.estado === 'pendiente' ? '<span class="badge warn">Pendiente</span>' : '<span class="badge">Inactivo</span>'}</td>
-      <td class="small"><span class="mono">${esc(d.ip_lectura || d.ip || '')}</span>${d.ip_lectura ? '<br><span class="badge pri">Lectura directa</span>' : ''}</td>
+      <td class="small"><span class="mono">${esc(d.ip_lectura || d.ip || '')}</span>${d.ip_lectura ? '<br><span class="badge pri">Lectura directa</span>' : ''}${d.enviar_altas ? ' <span class="badge info">Altas de Odoo</span>' : ''}</td>
       <td class="small">${esc(d.ultimo_contacto || 'nunca')}${d.ultimo_error ? `<br><span class="badge bad" title="${esc(d.ultimo_error)}">Error de lectura</span>` : ''}</td><td class="num">${d.total_registros}</td>
       <td class="acciones">${d.estado === 'pendiente' ? `<button class="btn sm primary" data-ok="${d.id}">Aprobar</button> ` : ''}
         ${d.marca === 'hikvision' ? `<button class="btn sm" data-url="${d.id}">URL</button> ` : ''}
@@ -327,8 +327,9 @@ views.dispositivos = { title: 'Checadores', async render(el) {
       ${field('Número de serie', inp('serie', d.serie))}${field('Sede', sedesOpt(d.sede_id))}
       ${d.marca === 'zkteco' ? field('IP lectura directa', inp('ip_lectura', d.ip_lectura || '', 'placeholder="vacío = sólo ADMS"')) + field('Puerto', inp('puerto', d.puerto || 4370, 'type="number"')) : ''}
       ${field('Estado', sel('estado', ['activo', 'pendiente', 'inactivo'].map((s) => `<option ${d.estado === s ? 'selected' : ''}>${s}</option>`).join('')))}
+      ${d.marca === 'zkteco' ? `<label class="f full"><span><input type="checkbox" name="enviar_altas" value="1" ${d.enviar_altas ? 'checked' : ''}> Recibir altas de empleados de Odoo (crea en este checador a los empleados nuevos de Odoo; requiere IP de lectura directa)</span></label>` : ''}
       ${d.marca === 'hikvision' ? `<label class="f full"><span><input type="checkbox" name="regenerar_token" value="1"> Generar nueva URL (la anterior dejará de funcionar)</span></label>` : ''}`,
-    async (x) => { await api('/dispositivos/' + d.id, { method: 'PUT', body: { ...x, regenerar_token: !!x.regenerar_token } }); toast('Guardado'); route(); });
+    async (x) => { await api('/dispositivos/' + d.id, { method: 'PUT', body: { ...x, regenerar_token: !!x.regenerar_token, ...(d.marca === 'zkteco' ? { enviar_altas: x.enviar_altas ? 1 : 0 } : {}) } }); toast('Guardado'); route(); });
   });
 } };
 
@@ -453,11 +454,102 @@ views.usuarios = { title: 'Usuarios del sistema', async render(el) {
   el.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => { if (confirmar('¿Eliminar usuario?')) { await api('/usuarios/' + b.dataset.del, { method: 'DELETE' }); route(); } });
 } };
 
+views.odoo = { title: 'Integración con Odoo', async render(el) {
+  await loadCatalogos();
+  const c = await api('/odoo');
+  const r = c.resumen;
+  const chk = (n, v) => `<input type="checkbox" name="${n}" value="1" ${v === '1' ? 'checked' : ''}>`;
+  el.innerHTML = `
+    <div class="grid two" style="align-items:start">
+      <form class="card" id="cfg"><h2>Conexión</h2>
+        <div class="grid" style="grid-template-columns:1fr 1fr">
+          ${field('Dirección de Odoo', inp('odoo_url', c.odoo_url || '', 'placeholder="https://miempresa.odoo.com" required'), true)}
+          ${field('Base de datos (opcional en Odoo Online)', inp('odoo_db', c.odoo_db || '', 'placeholder="miempresa"'))}
+          ${field('Usuario (correo del dueño de la API key)', inp('odoo_login', c.odoo_login || '', 'placeholder="rh@empresa.com"'))}
+          ${field('API key', inp('odoo_api_key', '', `type="password" autocomplete="new-password" placeholder="${c.tiene_api_key ? '•••••• guardada (dejar vacío para conservar)' : 'Pega aquí la API key'}"`), true)}
+          ${field('Horario para empleados nuevos', sel('odoo_horario_id', opts(state.cat.horarios, c.odoo_horario_id, '— Sin horario —')))}
+          ${field('Enviar asistencias desde', `<input type="date" name="odoo_asist_desde" value="${esc(c.odoo_asist_desde || today())}">`)}
+          <label class="f full"><span>${chk('odoo_activo', c.odoo_activo)} Sincronizar automáticamente cada 10 minutos</span></label>
+          <label class="f full"><span>${chk('odoo_enviar_asist', c.odoo_enviar_asist)} Enviar entradas y salidas a Odoo Asistencias</span></label>
+        </div>
+        <div class="toolbar" style="margin:14px 0 0">
+          <button class="btn primary">Guardar</button>
+          <button type="button" class="btn" id="probar">Probar conexión</button>
+          <button type="button" class="btn" id="sync">Sincronizar ahora</button>
+        </div>
+        <div class="small muted">${c.ultima_sync ? 'Última sincronización: ' + esc(c.ultima_sync) : 'Aún no se ha sincronizado'}
+          ${c.ultimo_error ? `<br><span style="color:var(--bad)">Último error: ${esc(c.ultimo_error)}</span>` : ''}</div>
+      </form>
+      <div class="card"><h2>Cómo obtener la API key</h2><div class="help"><ol>
+        <li>En Odoo, haz clic en tu foto (arriba a la derecha) → <b>Mi perfil</b> (o <b>Preferencias</b>).</li>
+        <li>Pestaña <b>Seguridad de la cuenta</b> → <b>Nueva clave API</b>. Ponle un nombre como "Checadores" y copia la clave (sólo se muestra una vez).</li>
+        <li>El usuario debe tener permiso de <b>Empleados: Oficial</b> y <b>Asistencias: Administrador</b>.</li>
+        <li>En Odoo Online, la API sólo funciona en el plan <b>Personalizado</b> (Custom).</li>
+      </ol>
+      <p class="small" style="margin:8px 0 0"><b>Cómo se empatan:</b> el <b>ID de credencial</b> de cada empleado en Odoo (Ficha → Configuración de RR. HH.) debe ser igual a su número en el checador. Nombre, puesto y empresa se toman de Odoo. Si archivan a alguien en Odoo, queda inactivo aquí.</p>
+      <p class="small" style="margin:8px 0 0"><b>Altas al checador:</b> en <a href="#/dispositivos">Checadores</a> → Editar, activa "Recibir altas de empleados de Odoo". Después la persona debe registrar su huella o rostro en el equipo.</p></div></div>
+    </div>
+    <div id="res" style="margin-top:14px"></div>`;
+  const form = $('#cfg', el);
+  const datos = () => { const d = Object.fromEntries(new FormData(form)); d.odoo_activo = d.odoo_activo ? '1' : '0'; d.odoo_enviar_asist = d.odoo_enviar_asist ? '1' : '0'; return d; };
+  const ocupado = async (b, texto, fn) => { const t = b.textContent; b.disabled = true; b.textContent = texto; try { await fn(); } catch (e) { toast(e.message, true); } finally { b.disabled = false; b.textContent = t; } };
+  form.onsubmit = async (e) => { e.preventDefault(); try { await api('/odoo', { method: 'PUT', body: datos() }); toast('Configuración guardada'); route(); } catch (err) { toast(err.message, true); } };
+  $('#probar', el).onclick = (e) => ocupado(e.target, 'Probando…', async () => {
+    await api('/odoo', { method: 'PUT', body: datos() });
+    const p = await api('/odoo/probar', { method: 'POST' });
+    modal('Conexión con Odoo exitosa ✅', `<div class="full"><table><tbody>
+      ${[['Versión de Odoo', p.version], ['API', p.api], ['Empleados activos', p.empleados], ['Con ID de credencial', p.con_credencial], ['Asistencias', p.asistencias]]
+        .map(([k, v]) => `<tr><td class="muted">${k}</td><td><b>${esc(v ?? '-')}</b></td></tr>`).join('')}</tbody></table></div>`, null);
+  });
+  $('#sync', el).onclick = (e) => ocupado(e.target, 'Sincronizando…', async () => {
+    await api('/odoo', { method: 'PUT', body: datos() });
+    await api('/odoo/sincronizar', { method: 'POST' }); toast('Sincronización terminada'); route();
+  });
+  if (!r) return;
+  const E = r.empleados, A = r.asistencias;
+  const sinCred = E.sin_credencial || [];
+  $('#res', el).innerHTML = `
+    <h2>Resultado de la última sincronización <span class="small muted">(${esc(r.fecha)})</span></h2>
+    <div class="grid kpis">
+      <div class="card kpi"><div class="label">Empleados en Odoo</div><div class="value">${E.odoo_total}</div></div>
+      <div class="card kpi ok"><div class="label">Empatados</div><div class="value">${E.vinculados}</div><div class="small muted">${E.actualizados} actualizados · ${E.bajas} bajas</div></div>
+      <div class="card kpi info"><div class="label">Nuevos desde Odoo</div><div class="value">${E.nuevos.length}</div></div>
+      <div class="card kpi warn"><div class="label">Sin empatar</div><div class="value">${E.solo_local.length + sinCred.length}</div><div class="small muted">${E.solo_local.length} sólo aquí · ${sinCred.length} sólo en Odoo</div></div>
+      <div class="card kpi"><div class="label">Asistencias a Odoo</div><div class="value">${A.activo ? A.enviadas + A.actualizadas : '—'}</div><div class="small muted">${A.activo ? `${A.errores.length} con error` : 'desactivado'}</div></div>
+    </div>
+    ${(E.conflictos || []).length ? `<div class="help" style="margin-bottom:14px;color:var(--bad)">${E.conflictos.map(esc).join('<br>')}</div>` : ''}
+    <div class="grid two" style="align-items:start">
+      <div class="card"><h2>Empleados del checador sin empate en Odoo</h2>
+        <p class="small muted">Elige a quién corresponde en Odoo y presiona <b>Vincular</b>: se guardará su número como ID de credencial en Odoo y aquí tomará el nombre de Odoo.</p>
+        ${E.solo_local.length ? `<div class="table-wrap"><table><thead><tr><th>No.</th><th>Nombre aquí</th><th>Empleado en Odoo</th><th></th></tr></thead><tbody>
+        ${E.solo_local.map((l) => `<tr><td class="mono">${esc(l.numero)}</td><td>${esc(l.nombre)}</td>
+          <td>${sinCred.length ? `<select data-sel="${l.id}" style="max-width:240px"><option value="">— Elegir —</option>${sinCred.map((o) => `<option value="${o.id}" ${l.sugerencia?.id === o.id ? 'selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select>` : '<span class="muted small">No hay empleados de Odoo sin ID de credencial</span>'}</td>
+          <td>${sinCred.length ? `<button class="btn sm primary" data-vin="${l.id}">Vincular</button>` : ''}</td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="empty">Todos los empleados están empatados ✅</div>'}
+      </div>
+      <div class="card"><h2>En Odoo sin ID de credencial</h2>
+        <p class="small muted">Estos empleados no tienen número de checador en Odoo. Captúralo en Odoo o vincúlalos desde la lista de la izquierda.</p>
+        ${sinCred.length ? sinCred.map((o) => `<div class="list-row"><span>${esc(o.nombre)}</span></div>`).join('') : '<div class="empty">Ninguno ✅</div>'}
+        ${E.nuevos.length ? `<h3 style="margin-top:14px">Dados de alta desde Odoo</h3>${E.nuevos.map((n) => `<div class="list-row"><span class="mono">${esc(n.numero)}</span><span>${esc(n.nombre)}</span></div>`).join('')}` : ''}
+        ${(r.checadores || []).length ? `<h3 style="margin-top:14px">Altas enviadas a checadores</h3>${r.checadores.map((x) => `<div class="list-row"><b>${esc(x.dispositivo)}</b><span>${x.error ? `<span class="badge bad">${esc(x.error)}</span>` : `${x.creados.length} creados${x.omitidos.length ? ` · ${x.omitidos.length} omitidos` : ''}`}</span></div>
+          ${(x.creados || []).map((u) => `<div class="small muted">＋ ${esc(u.numero)} ${esc(u.nombre)} — falta registrar huella/rostro</div>`).join('')}
+          ${(x.omitidos || []).map((u) => `<div class="small" style="color:var(--warn)">${esc(u.numero)}: ${esc(u.motivo)}</div>`).join('')}`).join('')}` : ''}
+        ${A.activo && A.errores.length ? `<h3 style="margin-top:14px">Asistencias no enviadas</h3>${A.errores.map((x) => `<div class="small" style="color:var(--bad)">${esc(x)}</div>`).join('')}` : ''}
+      </div>
+    </div>`;
+  el.querySelectorAll('[data-vin]').forEach((b) => b.onclick = () => ocupado(b, '…', async () => {
+    const odoo_id = el.querySelector(`[data-sel="${b.dataset.vin}"]`).value;
+    if (!odoo_id) throw new Error('Elige el empleado de Odoo');
+    const x = await api('/odoo/vincular', { method: 'POST', body: { empleado_id: Number(b.dataset.vin), odoo_id: Number(odoo_id) } });
+    toast('Vinculado con ' + x.nombre); b.closest('tr').remove();
+  }));
+} };
+
 // ---------------- Router ----------------
 async function route() {
   const [p, query] = (location.hash.slice(2) || 'tablero').split('?');
   let name = views[p] ? p : 'tablero';
-  if (!isAdmin() && ['dispositivos', 'importar', 'catalogos', 'usuarios'].includes(name)) name = 'tablero';
+  if (!isAdmin() && ['dispositivos', 'importar', 'catalogos', 'usuarios', 'odoo'].includes(name)) name = 'tablero';
   const v = views[name];
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.r === name));
   $('#title').textContent = v.title;

@@ -94,6 +94,17 @@ addColumn('dispositivos', 'ip_lectura', 'TEXT');            // IP para lectura d
 addColumn('dispositivos', 'puerto', 'INTEGER DEFAULT 4370');
 addColumn('dispositivos', 'ultima_sincronizacion', 'TEXT');
 addColumn('dispositivos', 'ultimo_error', 'TEXT');
+addColumn('dispositivos', 'enviar_altas', 'INTEGER DEFAULT 0'); // recibir altas de empleados de Odoo
+addColumn('empleados', 'odoo_id', 'INTEGER');
+db.exec(`CREATE TABLE IF NOT EXISTS odoo_asistencias (
+  empleado_id INTEGER NOT NULL REFERENCES empleados(id),
+  fecha TEXT NOT NULL,
+  odoo_id INTEGER,
+  check_in TEXT, check_out TEXT,
+  error TEXT,
+  enviado_en TEXT,
+  PRIMARY KEY (empleado_id, fecha)
+)`);
 
 function seed(hashPassword) {
   const count = db.prepare('SELECT COUNT(*) c FROM empresas').get().c;

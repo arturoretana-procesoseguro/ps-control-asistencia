@@ -88,4 +88,36 @@ async function leerChecadas(ip, puerto) {
   }, 120000);
 }
 
-module.exports = { infoEquipo, leerUsuarios, leerChecadas, fechaLocal, explicarError };
+/** Nombre compatible con el checador: sin acentos, sólo ASCII, máximo 24 caracteres. */
+function nombreChecador(n) {
+  return String(n || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ñ/g, 'n').replace(/Ñ/g, 'N')
+    .replace(/[^\x20-\x7E]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
+}
+
+/**
+ * Da de alta usuarios en el checador (sin huella/rostro: la persona debe enrolarse en el equipo).
+ * No modifica ni borra usuarios existentes. usuarios: [{numero, nombre}]
+ */
+async function crearUsuarios(ip, puerto, usuarios) {
+  return conLectura(ip, puerto, async (dev) => {
+    const r = await dev.getUsers();
+    const existentes = r?.data || [];
+    const numeros = new Set(existentes.map((u) => String(u.userId ?? u.user_id ?? '').trim()));
+    let uid = existentes.reduce((m, u) => Math.max(m, Number(u.uid) || 0), 0);
+    const creados = [], omitidos = [];
+    for (const u of usuarios) {
+      const numero = String(u.numero).trim();
+      if (numeros.has(numero)) { omitidos.push({ numero, motivo: 'ya existe en el checador' }); continue; }
+      if (!/^[0-9A-Za-z]{1,9}$/.test(numero)) { omitidos.push({ numero, motivo: 'el número debe tener máximo 9 letras o dígitos' }); continue; }
+      uid += 1;
+      if (uid > 3000) { omitidos.push({ numero, motivo: 'el checador no admite más usuarios' }); continue; }
+      await dev.setUser(uid, numero, nombreChecador(u.nombre), '', 0, 0);
+      numeros.add(numero);
+      creados.push({ numero, nombre: nombreChecador(u.nombre), uid });
+    }
+    if (creados.length) { try { await dev.executeCmd(1013, ''); } catch { /* CMD_REFRESHDATA opcional */ } }
+    return { creados, omitidos };
+  }, 60000);
+}
+
+module.exports = { infoEquipo, leerUsuarios, leerChecadas, crearUsuarios, nombreChecador, fechaLocal, explicarError };

@@ -38,6 +38,7 @@ Abrir `http://SERVIDOR:8080/` (administración) y `https://SERVIDOR/campo` (pers
 | `TRUST_PROXY` | `0` | Poner `1` si va detrás de Nginx / balanceador |
 | `ZK_AUTO_APROBAR` | `0` | `1` = aceptar ZKTeco nuevos sin aprobación manual |
 | `ZK_SYNC_MIN` | `5` | Minutos entre lecturas directas de ZKTeco (0 = desactivar) |
+| `ODOO_SYNC_MIN` | `10` | Minutos entre sincronizaciones con Odoo (0 = desactivar) |
 | `ZK_TIMEZONE` | `-6` | Zona horaria que se envía a los ZKTeco |
 | `CAMPO_EXIGIR_FOTO` | `0` | `1` = la foto es obligatoria en registros de campo |
 
@@ -61,6 +62,17 @@ En Windows PowerShell usar `npm.cmd` en lugar de `npm`.
 
 En todos los casos, el **ID de usuario del checador debe ser igual al número de empleado** en el sistema. Los registros de números no dados de alta se conservan y se marcan en el tablero.
 
+## Integración con Odoo
+Pantalla **🔗 Odoo** (sólo administradores). Requiere una **API key** de un usuario con permisos de Empleados y Asistencias. En **Odoo Online la API externa sólo está disponible en el plan Personalizado (Custom)**.
+
+- **Empate**: el *ID de credencial* (Badge ID) del empleado en Odoo = número del empleado en el checador (se ignoran ceros a la izquierda). Nombre, puesto y empresa se toman de Odoo.
+- **Vincular**: para empleados del checador sin empate, se elige su ficha de Odoo y el sistema escribe el número como ID de credencial en Odoo (sugiere coincidencias por nombre).
+- **Altas**: empleados nuevos en Odoo con ID de credencial se crean aquí y, en los checadores ZKTeco con *Recibir altas de Odoo* activado, se crea el usuario en el equipo (número y nombre sin acentos, máx. 24 caracteres). La persona debe registrar su huella o rostro en el checador. Si el checador tiene sede asignada, sólo recibe empleados de esa sede o sin sede.
+- **Bajas**: empleados archivados en Odoo quedan inactivos aquí (no se borran del checador).
+- **Asistencias**: por cada día con entrada y salida se crea/actualiza un registro en *Asistencias* de Odoo (hora convertida a UTC). Los días sin salida no se envían hasta corregirse.
+- Sincronización automática cada `ODOO_SYNC_MIN` minutos (10 por defecto) si está activada, o con *Sincronizar ahora*.
+- Compatible con la API JSON-2 (Odoo 19+) y JSON-RPC (versiones anteriores). La API key se guarda en `data/` y nunca se envía al navegador.
+
 ## Reglas del reporte
 - Entrada = primer registro del día (o primera "entrada" explícita); salida = último registro (o última "salida").
 - Retardo si la entrada es posterior a la hora de entrada + tolerancia (se reportan los minutos desde la hora de entrada).
@@ -74,6 +86,8 @@ src/db.js            esquema SQLite y datos iniciales
 src/dispositivos.js  recepción ZKTeco (ADMS) y Hikvision (ISAPI)
 src/zk-pull.js       lectura directa de ZKTeco por TCP 4370
 src/zk-sync.js       sincronización periódica e importación de usuarios
+src/odoo.js          cliente de la API de Odoo (JSON-2 / JSON-RPC)
+src/odoo-sync.js     empleados, altas al checador y asistencias con Odoo
 scripts/probar-zk.js prueba de conexión con un checador ZKTeco
 src/api.js           API de administración y de campo
 src/reporte.js       cálculo de asistencia
