@@ -46,7 +46,7 @@ function modal(title, html, onSubmit, { submitText = 'Guardar' } = {}) {
   const bg = document.createElement('div'); bg.className = 'modal-bg';
   bg.innerHTML = `<form class="modal"><h2>${esc(title)}</h2><div class="form">${html}</div>
     <div class="err-msg" style="margin-top:10px"></div>
-    <div class="actions"><button type="button" class="btn" data-x>Cancelar</button>${onSubmit ? `<button class="btn primary">${esc(submitText)}</button>` : ''}</div></form>`;
+    <div class="actions"><button type="button" class="btn" data-x>${onSubmit ? 'Cancelar' : 'Cerrar'}</button>${onSubmit ? `<button class="btn primary">${esc(submitText)}</button>` : ''}</div></form>`;
   const close = () => bg.remove();
   bg.querySelector('[data-x]').onclick = close;
   bg.addEventListener('mousedown', (e) => { if (e.target === bg) close(); });
@@ -246,11 +246,17 @@ views.dispositivos = { title: 'Checadores', async render(el) {
     ${list.length ? `<div class="table-wrap" style="margin-bottom:16px"><table><thead><tr><th>Nombre</th><th>Marca</th><th>Serie</th><th>Sede</th><th>Estado</th><th>IP</th><th>Último contacto</th><th class="num">Registros</th><th></th></tr></thead><tbody>
     ${list.map((d) => `<tr><td><b>${esc(d.nombre)}</b></td><td>${d.marca === 'zkteco' ? 'ZKTeco' : 'Hikvision'}</td><td class="mono">${esc(d.serie || '')}</td>
       <td>${esc(d.sede || '')}</td><td>${d.estado === 'activo' ? '<span class="badge ok">Activo</span>' : d.estado === 'pendiente' ? '<span class="badge warn">Pendiente</span>' : '<span class="badge">Inactivo</span>'}</td>
-      <td class="mono small">${esc(d.ip || '')}</td><td class="small">${esc(d.ultimo_contacto || 'nunca')}</td><td class="num">${d.total_registros}</td>
-      <td>${d.estado === 'pendiente' ? `<button class="btn sm primary" data-ok="${d.id}">Aprobar</button> ` : ''}
-        ${d.marca === 'hikvision' ? `<button class="btn sm" data-url="${d.id}">URL</button> ` : ''}<button class="btn sm" data-ed="${d.id}">Editar</button> <button class="btn sm danger" data-del="${d.id}">Quitar</button></td></tr>`).join('')}
+      <td class="small"><span class="mono">${esc(d.ip_lectura || d.ip || '')}</span>${d.ip_lectura ? '<br><span class="badge pri">Lectura directa</span>' : ''}</td>
+      <td class="small">${esc(d.ultimo_contacto || 'nunca')}${d.ultimo_error ? `<br><span class="badge bad" title="${esc(d.ultimo_error)}">Error de lectura</span>` : ''}</td><td class="num">${d.total_registros}</td>
+      <td class="acciones">${d.estado === 'pendiente' ? `<button class="btn sm primary" data-ok="${d.id}">Aprobar</button> ` : ''}
+        ${d.marca === 'hikvision' ? `<button class="btn sm" data-url="${d.id}">URL</button> ` : ''}
+        ${d.ip_lectura ? `<button class="btn sm" data-probar="${d.id}">Probar</button> <button class="btn sm primary" data-sync="${d.id}">Sincronizar</button> <button class="btn sm" data-usr="${d.id}">Importar empleados</button> ` : ''}<button class="btn sm" data-ed="${d.id}">Editar</button> <button class="btn sm danger" data-del="${d.id}">Quitar</button></td></tr>`).join('')}
     </tbody></table></div>` : ''}
     <div class="grid two">
+      <div class="card" style="grid-column:1/-1"><h2>ZKTeco sin ADMS (lectura directa por IP, ej. MB460)</h2><div class="help">
+      Si tu checador no tiene la opción "Servidor en la nube / ADMS", agrégalo con <b>＋ Agregar ZKTeco</b> capturando su <b>IP</b> (puerto 4370).
+      El sistema leerá sus checadas automáticamente cada ${'5'} minutos; también puedes usar <b>Sincronizar</b>. Con <b>Importar empleados</b> se dan de alta los usuarios que ya tiene el checador.
+      <br><b>Requisito:</b> este servidor debe estar en la misma red que el checador y la clave de comunicación del equipo debe ser 0. Sólo se leen datos: no se borra nada del checador.</div></div>
       <div class="card"><h2>Configurar un ZKTeco (ADMS / PUSH)</h2><div class="help"><ol>
         <li>En el checador: <b>Menú → Comunicación → Servidor en la nube / ADMS</b> (<i>Cloud Server Setting</i>).</li>
         <li>Dirección del servidor: <code>${esc(host)}</code> · Puerto: <code>${esc(port)}</code> · HTTPS/Proxy: desactivado (salvo que publiquen el sitio con HTTPS).</li>
@@ -267,7 +273,9 @@ views.dispositivos = { title: 'Checadores', async render(el) {
   const sedesOpt = (v) => sel('sede_id', opts(state.cat.sedes, v, '— Sin sede —'));
   $('#add-zk', el).onclick = () => modal('Agregar checador ZKTeco', `
     ${field('Nombre', inp('nombre', '', 'required placeholder="Ej. Recepción oficina CDMX"'), true)}
-    ${field('Número de serie (SN)', inp('serie', '', 'required placeholder="Ej. CGXH201260045"'))}${field('Sede', sedesOpt())}`,
+    ${field('Número de serie (SN)', inp('serie', '', 'placeholder="Ej. CLXP212760296"'))}${field('Sede', sedesOpt())}
+    ${field('IP del checador (lectura directa)', inp('ip_lectura', '', 'placeholder="Ej. 192.168.10.231"'))}${field('Puerto', inp('puerto', '4370', 'type="number"'))}
+    <p class="small muted full" style="margin:0">Captura la <b>IP</b> si el equipo no tiene ADMS o quieres leerlo directamente. Para ADMS basta el número de serie.</p>`,
     async (d) => { await api('/dispositivos', { method: 'POST', body: { ...d, marca: 'zkteco' } }); toast('Checador agregado'); route(); });
   $('#add-hik', el).onclick = () => modal('Agregar checador Hikvision', `
     ${field('Nombre', inp('nombre', '', 'required placeholder="Ej. Acceso planta"'), true)}
@@ -283,6 +291,31 @@ views.dispositivos = { title: 'Checadores', async render(el) {
       <p class="small muted">URL completa: <code>${esc(location.origin)}/hikvision/${esc(d.token)}</code><br>Trátala como contraseña: quien la conozca puede enviar registros a nombre de este equipo.</p></div>`, null);
   };
   el.querySelectorAll('[data-url]').forEach((b) => b.onclick = () => mostrarUrl(b.dataset.url));
+  const ocupado = async (b, texto, fn) => {
+    const t = b.textContent; b.disabled = true; b.textContent = texto;
+    try { await fn(); } catch (e) { toast(e.message, true); } finally { b.disabled = false; b.textContent = t; }
+  };
+  el.querySelectorAll('[data-probar]').forEach((b) => b.onclick = () => ocupado(b, 'Conectando…', async () => {
+    const i = await api(`/dispositivos/${b.dataset.probar}/probar`, { method: 'POST' });
+    modal('Conexión exitosa ✅', `<div class="full"><table><tbody>
+      ${[['Número de serie', i.serie], ['Modelo', i.nombre], ['Firmware', i.firmware], ['Plataforma', i.plataforma], ['Hora del checador', i.hora_equipo], ['Usuarios', i.usuarios], ['Checadas guardadas', i.checadas]]
+        .map(([k, v]) => `<tr><td class="muted">${k}</td><td><b>${esc(v ?? '-')}</b></td></tr>`).join('')}</tbody></table></div>`, null);
+  }));
+  el.querySelectorAll('[data-sync]').forEach((b) => b.onclick = () => ocupado(b, 'Leyendo…', async () => {
+    const r = await api(`/dispositivos/${b.dataset.sync}/sincronizar`, { method: 'POST' });
+    toast(`Se leyeron ${r.leidas} checadas, ${r.nuevas} nuevas`); route();
+  }));
+  el.querySelectorAll('[data-usr]').forEach((b) => b.onclick = () => {
+    const d = byId(b.dataset.usr);
+    modal('Importar empleados desde ' + d.nombre, `
+      <p class="full small muted" style="margin:0">Se crearán los usuarios del checador que aún no existan en el sistema (con su número y nombre). Los empleados existentes no se modifican. Después puedes completar sus datos en Empleados.</p>
+      ${field('Empresa', sel('empresa_id', opts(state.cat.empresas, '', '— Selecciona —')))}${field('Sede', sel('sede_id', opts(state.cat.sedes, d.sede_id, '— Ninguna —')))}
+      ${field('Horario', sel('horario_id', opts(state.cat.horarios, '', '— Sin horario —')))}`,
+    async (x) => {
+      const r = await api(`/dispositivos/${d.id}/importar-usuarios`, { method: 'POST', body: x });
+      toast(`Usuarios en checador: ${r.en_checador}. Nuevos empleados: ${r.creados}. Ya existían: ${r.ya_existian}.`);
+    }, { submitText: 'Importar' });
+  });
   el.querySelectorAll('[data-ok]').forEach((b) => b.onclick = async () => { await api('/dispositivos/' + b.dataset.ok, { method: 'PUT', body: { estado: 'activo' } }); toast('Checador aprobado'); route(); });
   el.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
     if (!confirmar('¿Quitar este checador? Los registros ya recibidos se conservan.')) return;
@@ -292,6 +325,7 @@ views.dispositivos = { title: 'Checadores', async render(el) {
     const d = byId(b.dataset.ed);
     modal('Editar checador', `${field('Nombre', inp('nombre', d.nombre, 'required'), true)}
       ${field('Número de serie', inp('serie', d.serie))}${field('Sede', sedesOpt(d.sede_id))}
+      ${d.marca === 'zkteco' ? field('IP lectura directa', inp('ip_lectura', d.ip_lectura || '', 'placeholder="vacío = sólo ADMS"')) + field('Puerto', inp('puerto', d.puerto || 4370, 'type="number"')) : ''}
       ${field('Estado', sel('estado', ['activo', 'pendiente', 'inactivo'].map((s) => `<option ${d.estado === s ? 'selected' : ''}>${s}</option>`).join('')))}
       ${d.marca === 'hikvision' ? `<label class="f full"><span><input type="checkbox" name="regenerar_token" value="1"> Generar nueva URL (la anterior dejará de funcionar)</span></label>` : ''}`,
     async (x) => { await api('/dispositivos/' + d.id, { method: 'PUT', body: { ...x, regenerar_token: !!x.regenerar_token } }); toast('Guardado'); route(); });

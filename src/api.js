@@ -8,6 +8,7 @@ const U = require('./util');
 const { calcularAsistencia, resumen } = require('./reporte');
 const { interpretar } = require('./importar');
 const { nuevoToken } = require('./dispositivos');
+const zkSync = require('./zk-sync');
 
 const FOTOS_DIR = path.join(DATA_DIR, 'fotos');
 fs.mkdirSync(FOTOS_DIR, { recursive: true });
@@ -187,17 +188,31 @@ api.get('/dispositivos', wrap((req, res) => {
 api.post('/dispositivos', soloAdmin, wrap((req, res) => {
   const b = req.body;
   if (!['zkteco', 'hikvision'].includes(b.marca)) return res.status(400).json({ error: 'Marca inválida' });
-  if (b.marca === 'zkteco' && !b.serie) return res.status(400).json({ error: 'El número de serie (SN) es obligatorio para ZKTeco' });
-  const r = db.prepare('INSERT INTO dispositivos (nombre, marca, serie, token, sede_id, estado) VALUES (?,?,?,?,?,?)')
-    .run(b.nombre || b.marca, b.marca, nn(b.serie), b.marca === 'hikvision' ? nuevoToken() : null, nn(b.sede_id), b.estado || 'activo');
+  if (b.marca === 'zkteco' && !b.serie && !b.ip_lectura) return res.status(400).json({ error: 'Captura el número de serie (SN) o la IP del checador' });
+  const r = db.prepare('INSERT INTO dispositivos (nombre, marca, serie, token, sede_id, estado, ip_lectura, puerto) VALUES (?,?,?,?,?,?,?,?)')
+    .run(b.nombre || b.marca, b.marca, nn(b.serie), b.marca === 'hikvision' ? nuevoToken() : null, nn(b.sede_id), b.estado || 'activo',
+      b.marca === 'zkteco' ? nn(b.ip_lectura) : null, Number(b.puerto) || 4370);
   res.json({ id: Number(r.lastInsertRowid) });
 }));
 api.put('/dispositivos/:id', soloAdmin, wrap((req, res) => {
-  const sets = ['nombre', 'serie', 'sede_id', 'estado'].filter((c) => c in req.body);
+  const sets = ['nombre', 'serie', 'sede_id', 'estado', 'ip_lectura', 'puerto'].filter((c) => c in req.body);
   if (sets.length) db.prepare(`UPDATE dispositivos SET ${sets.map((c) => c + '=?').join(',')} WHERE id = ?`)
     .run(...sets.map((c) => nn(req.body[c])), Number(req.params.id));
   if (req.body.regenerar_token) db.prepare("UPDATE dispositivos SET token = ? WHERE id = ? AND marca='hikvision'").run(nuevoToken(), Number(req.params.id));
   res.json({ ok: true });
+}));
+const devZk = (id) => {
+  const d = db.prepare("SELECT * FROM dispositivos WHERE id = ? AND marca = 'zkteco'").get(Number(id));
+  if (!d) throw new Error('Checador ZKTeco no encontrado');
+  return d;
+};
+const wrapAsync = (fn) => (req, res) => fn(req, res).catch((e) => res.status(400).json({ error: String(e.message || e) }));
+api.post('/dispositivos/:id/probar', soloAdmin, wrapAsync(async (req, res) => res.json(await zkSync.probar(devZk(req.params.id)))));
+api.post('/dispositivos/:id/sincronizar', soloAdmin, wrapAsync(async (req, res) => res.json(await zkSync.sincronizar(devZk(req.params.id)))));
+api.post('/dispositivos/:id/importar-usuarios', soloAdmin, wrapAsync(async (req, res) => {
+  const b = req.body || {};
+  res.json(await zkSync.importarUsuarios(devZk(req.params.id), {
+    empresa_id: nn(b.empresa_id), sede_id: nn(b.sede_id), horario_id: nn(b.horario_id), tipo: b.tipo || 'oficina' }));
 }));
 api.delete('/dispositivos/:id', soloAdmin, wrap((req, res) => {
   db.prepare('UPDATE registros SET dispositivo_id = NULL WHERE dispositivo_id = ?').run(Number(req.params.id));

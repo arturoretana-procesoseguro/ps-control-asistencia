@@ -85,6 +85,16 @@ CREATE TABLE IF NOT EXISTS ajustes (
 );
 `);
 
+// ---- migraciones de columnas nuevas ----
+function addColumn(tabla, col, def) {
+  const cols = db.prepare(`PRAGMA table_info(${tabla})`).all().map((c) => c.name);
+  if (!cols.includes(col)) db.exec(`ALTER TABLE ${tabla} ADD COLUMN ${col} ${def}`);
+}
+addColumn('dispositivos', 'ip_lectura', 'TEXT');            // IP para lectura directa TCP 4370 (ZKTeco sin ADMS)
+addColumn('dispositivos', 'puerto', 'INTEGER DEFAULT 4370');
+addColumn('dispositivos', 'ultima_sincronizacion', 'TEXT');
+addColumn('dispositivos', 'ultimo_error', 'TEXT');
+
 function seed(hashPassword) {
   const count = db.prepare('SELECT COUNT(*) c FROM empresas').get().c;
   if (count === 0) {

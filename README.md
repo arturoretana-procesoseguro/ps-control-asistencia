@@ -5,6 +5,7 @@ Sistema web para centralizar la asistencia de **Grupo Proceso Seguro**, **Proces
 | Fuente | Cómo llegan los registros |
 |---|---|
 | Checadores **ZKTeco** (oficinas) | El equipo envía cada checada en tiempo real por protocolo **ADMS / PUSH** |
+| Checadores **ZKTeco sin ADMS** (p. ej. MB460) | El servidor **lee** el checador por IP (TCP 4370) cada 5 minutos o con el botón *Sincronizar* |
 | Checadores **Hikvision** (oficinas) | El equipo envía eventos por **ISAPI HTTP Listening** |
 | **Personal de campo** | Página web en el celular (`/campo`) con número de empleado + PIN, **GPS**, **geocerca** y **foto** opcional |
 | Equipos sin conexión / historial | **Importación CSV** (ZKTime, ZKBio, iVMS-4200, HikCentral o plantilla) |
@@ -36,6 +37,7 @@ Abrir `http://SERVIDOR:8080/` (administración) y `https://SERVIDOR/campo` (pers
 | `COOKIE_SECURE` | `0` | Poner `1` cuando el sitio se sirva sólo por HTTPS |
 | `TRUST_PROXY` | `0` | Poner `1` si va detrás de Nginx / balanceador |
 | `ZK_AUTO_APROBAR` | `0` | `1` = aceptar ZKTeco nuevos sin aprobación manual |
+| `ZK_SYNC_MIN` | `5` | Minutos entre lecturas directas de ZKTeco (0 = desactivar) |
 | `ZK_TIMEZONE` | `-6` | Zona horaria que se envía a los ZKTeco |
 | `CAMPO_EXIGIR_FOTO` | `0` | `1` = la foto es obligatoria en registros de campo |
 
@@ -49,7 +51,15 @@ Abrir `http://SERVIDOR:8080/` (administración) y `https://SERVIDOR/campo` (pers
 
 **Hikvision**: dar de alta el equipo en **Checadores** para obtener su URL con token; en la web del equipo: Configuración → Red → Avanzado → *HTTP Listening*: IP, puerto 8080, URL `/hikvision/<token>`, y activar la notificación al centro de vigilancia en los eventos de control de acceso.
 
-En ambos casos, el **ID de usuario del checador debe ser igual al número de empleado** en el sistema. Los registros de números no dados de alta se conservan y se marcan en el tablero.
+**ZKTeco sin ADMS (lectura directa por IP)**: en **Checadores → Agregar ZKTeco** capturar la IP del equipo (puerto 4370). Requisitos: el servidor debe estar en la misma red que el checador y la clave de comunicación del equipo debe ser 0. Botones disponibles: *Probar* (datos del equipo), *Sincronizar* (leer checadas) e *Importar empleados* (dar de alta los usuarios del checador). Sólo se leen datos; no se borra nada del equipo.
+
+Prueba rápida desde la terminal, sin arrancar el sistema:
+```bash
+npm run probar-zk -- 192.168.10.231
+```
+En Windows PowerShell usar `npm.cmd` en lugar de `npm`.
+
+En todos los casos, el **ID de usuario del checador debe ser igual al número de empleado** en el sistema. Los registros de números no dados de alta se conservan y se marcan en el tablero.
 
 ## Reglas del reporte
 - Entrada = primer registro del día (o primera "entrada" explícita); salida = último registro (o última "salida").
@@ -62,6 +72,9 @@ En ambos casos, el **ID de usuario del checador debe ser igual al número de emp
 server.js            arranque
 src/db.js            esquema SQLite y datos iniciales
 src/dispositivos.js  recepción ZKTeco (ADMS) y Hikvision (ISAPI)
+src/zk-pull.js       lectura directa de ZKTeco por TCP 4370
+src/zk-sync.js       sincronización periódica e importación de usuarios
+scripts/probar-zk.js prueba de conexión con un checador ZKTeco
 src/api.js           API de administración y de campo
 src/reporte.js       cálculo de asistencia
 src/importar.js      lectura de CSV
