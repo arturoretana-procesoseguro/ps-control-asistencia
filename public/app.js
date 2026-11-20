@@ -1,0 +1,455 @@
+'use strict';
+/* Control de Asistencia — panel de administración (sin dependencias) */
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const state = { me: null, cat: {} };
+
+async function api(url, opts = {}) {
+  const r = await fetch('/api' + url, {
+    method: opts.method || 'GET', headers: opts.body ? { 'Content-Type': 'application/json' } : {},
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (r.status === 401 && !url.startsWith('/login')) { showLogin(); throw new Error('Sesión expirada'); }
+  const data = r.headers.get('content-type')?.includes('json') ? await r.json() : await r.text();
+  if (!r.ok) throw new Error(data.error || data || 'Error');
+  return data;
+}
+function toast(msg, err) {
+  const t = document.createElement('div'); t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 3800);
+}
+const today = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+const addDays = (s, n) => { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + n); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+const isAdmin = () => state.me?.rol === 'admin';
+const opts = (list, sel, empty = 'Todas', label = 'nombre') =>
+  `<option value="">${esc(empty)}</option>` + list.map((x) => `<option value="${x.id}" ${String(sel) === String(x.id) ? 'selected' : ''}>${esc(x[label])}</option>`).join('');
+const estadoBadge = (e) => {
+  const c = { 'A tiempo': 'ok', Retardo: 'warn', Falta: 'bad', Descanso: '', Pendiente: 'pri', 'Día no laborable': 'info' }[e] ?? '';
+  return `<span class="badge ${c}">${esc(e)}</span>`;
+};
+const origenBadge = (o) => {
+  const m = { zkteco: ['ZKTeco', 'pri'], hikvision: ['Hikvision', 'info'], campo: ['Campo', 'ok'], manual: ['Manual', 'warn'], importacion: ['Importado', ''] };
+  const [t, c] = m[o] || [o, ''];
+  return `<span class="badge ${c}">${esc(t)}</span>`;
+};
+const geoBadge = (r) => r.origen !== 'campo' ? '' : r.dentro_geocerca === 1 ? '<span class="badge ok">Dentro</span>'
+  : r.dentro_geocerca === 0 ? `<span class="badge bad">Fuera${r.distancia_m != null ? ' · ' + r.distancia_m + ' m' : ''}</span>` : '<span class="badge">Sin geocerca</span>';
+const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== '' && v != null)).toString();
+
+async function loadCatalogos() {
+  const [empresas, sedes, horarios] = await Promise.all([api('/empresas'), api('/sedes'), api('/horarios')]);
+  state.cat = { empresas, sedes, horarios };
+}
+
+// ---------------- Modal / formularios ----------------
+function modal(title, html, onSubmit, { submitText = 'Guardar' } = {}) {
+  const bg = document.createElement('div'); bg.className = 'modal-bg';
+  bg.innerHTML = `<form class="modal"><h2>${esc(title)}</h2><div class="form">${html}</div>
+    <div class="err-msg" style="margin-top:10px"></div>
+    <div class="actions"><button type="button" class="btn" data-x>Cancelar</button>${onSubmit ? `<button class="btn primary">${esc(submitText)}</button>` : ''}</div></form>`;
+  const close = () => bg.remove();
+  bg.querySelector('[data-x]').onclick = close;
+  bg.addEventListener('mousedown', (e) => { if (e.target === bg) close(); });
+  bg.querySelector('form').onsubmit = async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target));
+    try { await onSubmit(data, e.target); close(); } catch (err) { bg.querySelector('.err-msg').textContent = err.message; }
+  };
+  document.body.appendChild(bg);
+  bg.querySelector('input,select,textarea')?.focus();
+  return bg;
+}
+const field = (label, input, full) => `<label class="f ${full ? 'full' : ''}">${esc(label)}${input}</label>`;
+const inp = (name, v = '', attrs = '') => `<input name="${name}" value="${esc(v)}" ${attrs}>`;
+const sel = (name, html, attrs = '') => `<select name="${name}" ${attrs}>${html}</select>`;
+const confirmar = (msg) => window.confirm(msg);
+
+// ---------------- Vistas ----------------
+const views = {};
+
+views.tablero = { title: 'Tablero de hoy', async render(el) {
+  const d = await api('/dashboard');
+  const r = d.resumen;
+  el.innerHTML = `
+    <div class="grid kpis">
+      <div class="card kpi ok"><div class="label">Presentes</div><div class="value">${d.presentes}</div><div class="small muted">de ${r.total - r.descanso} esperados</div></div>
+      <div class="card kpi warn"><div class="label">Retardos</div><div class="value">${r.retardos}</div></div>
+      <div class="card kpi bad"><div class="label">Faltas</div><div class="value">${r.faltas}</div><div class="small muted">${r.pendientes} aún en tolerancia</div></div>
+      <div class="card kpi info"><div class="label">Registrados en campo</div><div class="value">${d.en_campo}</div><div class="small muted">${r.fuera_geocerca} fuera de geocerca</div></div>
+    </div>
+    ${d.numeros_sin_empleado ? `<div class="help" style="margin-bottom:14px">⚠️ Hay <b>${d.numeros_sin_empleado}</b> números de empleado con registros de checador que no están dados de alta. <a href="#/registros?sin_empleado=1">Ver registros</a></div>` : ''}
+    <div class="grid two">
+      <div class="card"><h2>Por empresa</h2>
+        ${d.por_empresa.length ? `<div class="table-wrap"><table><thead><tr><th>Empresa</th><th class="num">Esperados</th><th class="num">Presentes</th><th class="num">Retardos</th><th class="num">Faltas</th></tr></thead><tbody>
+        ${d.por_empresa.map((x) => `<tr><td>${esc(x.empresa)}</td><td class="num">${x.total}</td><td class="num">${x.presentes}</td><td class="num">${x.retardos}</td><td class="num">${x.faltas}</td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="empty">Aún no hay empleados dados de alta. <a href="#/empleados">Agregar empleados</a></div>'}
+        <h2 style="margin-top:18px">Últimos registros</h2>
+        ${d.ultimos.length ? d.ultimos.map((u) => `<div class="list-row"><div><b>${esc(u.empleado || 'No. ' + u.empleado_numero)}</b>
+          <div class="small muted">${esc(u.fecha_hora)} ${u.tipo ? '· ' + esc(u.tipo) : ''} ${u.dispositivo ? '· ' + esc(u.dispositivo) : ''}</div></div>
+          <div>${origenBadge(u.origen)} ${geoBadge(u)}</div></div>`).join('') : '<div class="empty">Sin registros todavía</div>'}
+      </div>
+      <div class="card"><h2>Checadores</h2>
+        ${d.dispositivos.length ? d.dispositivos.map((x) => {
+          const mins = x.ultimo_contacto ? (new Date(d.ahora.replace(' ', 'T')) - new Date(x.ultimo_contacto.replace(' ', 'T'))) / 60000 : Infinity;
+          const st = x.estado === 'pendiente' ? ['warn', 'Pendiente de aprobar'] : x.estado === 'inactivo' ? ['', 'Inactivo']
+            : x.marca === 'zkteco' ? (mins < 10 ? ['ok', 'En línea'] : ['bad', 'Sin conexión']) : (x.ultimo_contacto ? ['ok', 'Configurado'] : ['warn', 'Sin eventos aún']);
+          return `<div class="list-row"><div><span class="dot ${st[0]}"></span><b>${esc(x.nombre)}</b><div class="small muted">${x.marca === 'zkteco' ? 'ZKTeco' : 'Hikvision'} · último contacto ${esc(x.ultimo_contacto || 'nunca')}</div></div><span class="badge ${st[0]}">${st[1]}</span></div>`;
+        }).join('') : '<div class="empty">No hay checadores registrados. <a href="#/dispositivos">Configurar</a></div>'}
+      </div>
+    </div>`;
+} };
+
+views.asistencia = { title: 'Reporte de asistencia', async render(el, q) {
+  await loadCatalogos();
+  const f = { desde: q.desde || addDays(today(), -6), hasta: q.hasta || today(), empresa_id: q.empresa_id || '', sede_id: q.sede_id || '', tipo: q.tipo || '', estado: q.estado || '', empleado_id: q.empleado_id || '' };
+  el.innerHTML = `
+    ${f.empleado_id ? `<input type="hidden" form="flt" name="empleado_id" value="${esc(f.empleado_id)}">` : ''}
+    <form class="toolbar card" id="flt">
+      ${field('Desde', `<input type="date" name="desde" value="${f.desde}">`)}
+      ${field('Hasta', `<input type="date" name="hasta" value="${f.hasta}">`)}
+      ${state.me.empresa_id ? '' : field('Empresa', sel('empresa_id', opts(state.cat.empresas, f.empresa_id)))}
+      ${field('Sede', sel('sede_id', opts(state.cat.sedes, f.sede_id)))}
+      ${field('Tipo', sel('tipo', `<option value="">Todos</option>${['oficina', 'campo', 'mixto'].map((t) => `<option ${f.tipo === t ? 'selected' : ''}>${t}</option>`).join('')}`))}
+      ${field('Estado', sel('estado', `<option value="">Todos</option>${['A tiempo', 'Retardo', 'Falta', 'Pendiente', 'Descanso', 'Día no laborable'].map((t) => `<option ${f.estado === t ? 'selected' : ''}>${t}</option>`).join('')}`))}
+      <button class="btn primary">Consultar</button>
+      <a class="btn" href="/api/reporte.csv?${qs(f)}">⬇ Exportar Excel (CSV)</a>
+    </form>
+    <div id="res"><div class="empty">Cargando…</div></div>`;
+  $('#flt', el).onsubmit = (e) => { e.preventDefault(); location.hash = '#/asistencia?' + qs(Object.fromEntries(new FormData(e.target))); };
+  const d = await api('/reporte?' + qs(f));
+  const r = d.resumen;
+  $('#res', el).innerHTML = `
+    <div class="grid kpis">
+      <div class="card kpi ok"><div class="label">A tiempo</div><div class="value">${r.a_tiempo}</div></div>
+      <div class="card kpi warn"><div class="label">Retardos</div><div class="value">${r.retardos}</div></div>
+      <div class="card kpi bad"><div class="label">Faltas</div><div class="value">${r.faltas}</div></div>
+      <div class="card kpi"><div class="label">Sin salida</div><div class="value">${r.sin_salida}</div></div>
+      <div class="card kpi info"><div class="label">Fuera de geocerca</div><div class="value">${r.fuera_geocerca}</div></div>
+    </div>
+    ${d.filas.length ? `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>No.</th><th>Empleado</th><th>Empresa</th><th>Horario</th><th>Entrada</th><th>Salida</th><th class="num">Horas</th><th class="num">Retardo</th><th>Estado</th><th>Incidencias</th><th>Origen</th></tr></thead><tbody>
+    ${d.filas.map((x) => `<tr><td>${x.fecha}</td><td class="mono">${esc(x.numero)}</td><td><a href="#/registros?numero=${encodeURIComponent(x.numero)}&desde=${x.fecha}&hasta=${x.fecha}">${esc(x.nombre)}</a></td>
+      <td>${esc(x.empresa || '')}</td><td class="muted">${esc(x.horario)}</td><td>${x.entrada}</td><td>${x.salida}</td><td class="num">${x.horas}</td>
+      <td class="num">${x.retardo_min ? x.retardo_min + ' min' : ''}</td><td>${estadoBadge(x.estado)}</td>
+      <td class="small">${x.incidencias.map((i) => `<span class="badge ${/geocerca/.test(i) ? 'bad' : 'warn'}">${esc(i)}</span>`).join(' ')}</td><td class="small muted">${esc(x.origen)}</td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="empty card">No hay empleados que coincidan con los filtros.</div>'}`;
+} };
+
+views.registros = { title: 'Registros de checada', async render(el, q) {
+  const f = { desde: q.desde || addDays(today(), -6), hasta: q.hasta || today(), origen: q.origen || '', buscar: q.buscar || '', numero: q.numero || '', fuera: q.fuera || '', sin_empleado: q.sin_empleado || '', offset: Number(q.offset) || 0, limit: 100 };
+  el.innerHTML = `
+    <form class="toolbar card" id="flt">
+      ${field('Desde', `<input type="date" name="desde" value="${f.desde}">`)}
+      ${field('Hasta', `<input type="date" name="hasta" value="${f.hasta}">`)}
+      ${field('Origen', sel('origen', `<option value="">Todos</option>${[['zkteco', 'ZKTeco'], ['hikvision', 'Hikvision'], ['campo', 'Campo'], ['manual', 'Manual'], ['importacion', 'Importado']].map(([v, t]) => `<option value="${v}" ${f.origen === v ? 'selected' : ''}>${t}</option>`).join('')}`))}
+      ${field('Buscar', inp('buscar', f.buscar || f.numero, 'placeholder="Nombre o número"'))}
+      <label class="f">&nbsp;<span><input type="checkbox" name="fuera" value="1" ${f.fuera ? 'checked' : ''}> Sólo fuera de geocerca</span></label>
+      <label class="f">&nbsp;<span><input type="checkbox" name="sin_empleado" value="1" ${f.sin_empleado ? 'checked' : ''}> Sin empleado dado de alta</span></label>
+      <button class="btn primary">Filtrar</button>
+      <a class="btn" href="/api/registros.csv?${qs({ ...f, offset: '', limit: '' })}">⬇ CSV</a>
+      <button type="button" class="btn" id="add">＋ Registro manual</button>
+    </form>
+    <div id="res"><div class="empty">Cargando…</div></div>`;
+  $('#flt', el).onsubmit = (e) => { e.preventDefault(); location.hash = '#/registros?' + qs(Object.fromEntries(new FormData(e.target))); };
+  $('#add', el).onclick = () => registroManual();
+  const d = await api('/registros?' + qs(f));
+  $('#res', el).innerHTML = d.rows.length ? `
+    <div class="table-wrap"><table><thead><tr><th>Fecha y hora</th><th>No.</th><th>Empleado</th><th>Tipo</th><th>Origen</th><th>Dispositivo / ubicación</th><th>Geocerca</th><th>Foto</th><th>Nota</th>${isAdmin() ? '<th></th>' : ''}</tr></thead><tbody>
+    ${d.rows.map((r) => `<tr><td class="mono">${esc(r.fecha_hora)}</td><td class="mono">${esc(r.empleado_numero)}</td>
+      <td>${r.empleado ? esc(r.empleado) : `<span class="badge warn">No registrado</span> ${isAdmin() ? `<a href="#" data-alta="${esc(r.empleado_numero)}" class="small">dar de alta</a>` : ''}`}</td>
+      <td>${esc(r.tipo || '')}</td><td>${origenBadge(r.origen)}</td>
+      <td>${r.lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${r.lat},${r.lng}">📍 Ver mapa</a> <span class="small muted">±${Math.round(r.precision_m || 0)} m</span>` : esc(r.dispositivo || '')}</td>
+      <td>${geoBadge(r)}</td><td>${r.foto ? `<a target="_blank" href="/api/fotos/${encodeURIComponent(r.foto)}">📷 Ver</a>` : ''}</td>
+      <td class="small" style="white-space:normal;max-width:260px">${esc(r.nota || '')}${r.creado_por ? ` <span class="muted">(${esc(r.creado_por)})</span>` : ''}</td>
+      ${isAdmin() ? `<td><button class="btn sm danger" data-del="${r.id}">Eliminar</button></td>` : ''}</tr>`).join('')}
+    </tbody></table></div>
+    <div class="pager"><span class="muted">${f.offset + 1}–${f.offset + d.rows.length} de ${d.total}</span>
+      <span><button class="btn sm" id="prev" ${f.offset ? '' : 'disabled'}>← Anterior</button> <button class="btn sm" id="next" ${f.offset + d.rows.length < d.total ? '' : 'disabled'}>Siguiente →</button></span></div>`
+    : '<div class="empty card">No hay registros en este periodo.</div>';
+  const go = (off) => { location.hash = '#/registros?' + qs({ ...f, offset: off, limit: '' }); };
+  $('#prev', el) && ($('#prev', el).onclick = () => go(Math.max(0, f.offset - 100)));
+  $('#next', el) && ($('#next', el).onclick = () => go(f.offset + 100));
+  el.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+    if (!confirmar('¿Eliminar este registro de asistencia? Esta acción no se puede deshacer.')) return;
+    await api('/registros/' + b.dataset.del, { method: 'DELETE' }); toast('Registro eliminado'); route();
+  });
+  el.querySelectorAll('[data-alta]').forEach((a) => a.onclick = (e) => { e.preventDefault(); editarEmpleado({ numero: a.dataset.alta }); });
+} };
+
+async function registroManual() {
+  const emps = await api('/empleados');
+  const now = new Date(); now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  modal('Registro manual', `
+    ${field('Empleado', sel('empleado_numero', emps.filter((e) => e.activo).map((e) => `<option value="${esc(e.numero)}">${esc(e.numero)} · ${esc(e.nombre)}</option>`).join(''), 'required'), true)}
+    ${field('Fecha y hora', `<input type="datetime-local" name="fecha_hora" value="${now.toISOString().slice(0, 16)}" required>`)}
+    ${field('Tipo', sel('tipo', '<option value="entrada">Entrada</option><option value="salida">Salida</option><option value="">Sin tipo</option>'))}
+    ${field('Motivo (obligatorio)', '<textarea name="nota" rows="2" required placeholder="Ej. Olvidó checar, falla del checador, comisión…"></textarea>', true)}
+    <p class="small muted full" style="margin:0">El registro queda marcado como manual con tu usuario.</p>`,
+  async (data) => { await api('/registros', { method: 'POST', body: data }); toast('Registro guardado'); route(); });
+}
+
+views.empleados = { title: 'Empleados', async render(el, q) {
+  await loadCatalogos();
+  const all = await api('/empleados');
+  const buscar = (q.buscar || '').toLowerCase();
+  const list = all.filter((e) => (!buscar || (e.nombre + ' ' + e.numero).toLowerCase().includes(buscar)) && (q.inactivos ? true : e.activo));
+  el.innerHTML = `
+    <form class="toolbar" id="flt">
+      ${field('Buscar', inp('buscar', q.buscar || '', 'placeholder="Nombre o número"'))}
+      <label class="f">&nbsp;<span><input type="checkbox" name="inactivos" value="1" ${q.inactivos ? 'checked' : ''}> Mostrar inactivos</span></label>
+      <button class="btn">Filtrar</button>
+      ${isAdmin() ? '<button type="button" class="btn primary" id="add">＋ Nuevo empleado</button>' : ''}
+    </form>
+    <div class="help" style="margin-bottom:14px">El <b>número de empleado</b> debe ser igual al ID de usuario dado de alta en el checador ZKTeco ("ID de usuario / PIN") o Hikvision ("ID de empleado / Employee No.").
+    El personal <b>de campo</b> o <b>mixto</b> necesita un PIN para registrarse desde el celular en <code>${esc(location.origin)}/campo</code>.</div>
+    ${list.length ? `<div class="table-wrap"><table><thead><tr><th>No.</th><th>Nombre</th><th>Puesto</th><th>Empresa</th><th>Sede</th><th>Horario</th><th>Tipo</th><th>PIN campo</th><th>Estado</th><th></th></tr></thead><tbody>
+    ${list.map((e) => `<tr><td class="mono">${esc(e.numero)}</td><td><b>${esc(e.nombre)}</b></td><td>${esc(e.puesto || '')}</td><td>${esc(e.empresa || '')}</td>
+      <td>${esc(e.sede || '')}</td><td class="small">${esc(e.horario || '')}</td><td><span class="badge ${e.tipo === 'campo' ? 'ok' : e.tipo === 'mixto' ? 'info' : 'pri'}">${esc(e.tipo)}</span></td>
+      <td>${e.tipo === 'oficina' ? '' : e.tiene_pin ? '<span class="badge ok">Asignado</span>' : '<span class="badge warn">Falta PIN</span>'}</td>
+      <td>${e.activo ? '<span class="badge ok">Activo</span>' : '<span class="badge">Inactivo</span>'}</td>
+      <td>${isAdmin() ? `<button class="btn sm" data-ed="${e.id}">Editar</button>` : ''} <a class="btn sm" href="#/asistencia?empleado_id=${e.id}">Asistencia</a></td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="empty card">No hay empleados.</div>'}`;
+  $('#flt', el).onsubmit = (e) => { e.preventDefault(); location.hash = '#/empleados?' + qs(Object.fromEntries(new FormData(e.target))); };
+  $('#add', el) && ($('#add', el).onclick = () => editarEmpleado({}));
+  el.querySelectorAll('[data-ed]').forEach((b) => b.onclick = () => editarEmpleado(all.find((x) => x.id == b.dataset.ed)));
+} };
+
+async function editarEmpleado(e) {
+  if (!state.cat.empresas) await loadCatalogos();
+  const nuevo = !e.id;
+  const { empresas, sedes, horarios } = state.cat;
+  modal(nuevo ? 'Nuevo empleado' : 'Editar empleado', `
+    ${field('No. de empleado (ID en checador)', inp('numero', e.numero, 'required'))}
+    ${field('Nombre completo', inp('nombre', e.nombre, 'required'))}
+    ${field('Puesto', inp('puesto', e.puesto))}
+    ${field('Empresa', sel('empresa_id', opts(empresas, e.empresa_id, '— Selecciona —')))}
+    ${field('Sede / ubicación', sel('sede_id', opts(sedes, e.sede_id, '— Ninguna —')))}
+    ${field('Horario', sel('horario_id', opts(horarios, e.horario_id, '— Sin horario —')))}
+    ${field('Tipo de registro', sel('tipo', [['oficina', 'Oficina (checador)'], ['campo', 'Campo (celular)'], ['mixto', 'Mixto (ambos)']].map(([v, t]) => `<option value="${v}" ${e.tipo === v ? 'selected' : ''}>${t}</option>`).join('')))}
+    ${field(nuevo ? 'PIN para campo (4–8 dígitos)' : 'Nuevo PIN (dejar vacío para no cambiar)', inp('pin', '', 'inputmode="numeric" pattern="[0-9]{4,8}" autocomplete="off"'))}
+    ${nuevo ? '' : field('Estado', sel('activo', `<option value="1" ${e.activo ? 'selected' : ''}>Activo</option><option value="0" ${!e.activo ? 'selected' : ''}>Inactivo (baja)</option>`))}
+    <p class="small muted full" style="margin:0">La geocerca del personal de campo es la ubicación y el radio de su sede.</p>`,
+  async (d) => {
+    if (!d.pin) delete d.pin;
+    if ('activo' in d) d.activo = d.activo === '1';
+    if ((d.tipo === 'campo' || d.tipo === 'mixto') && nuevo && !d.pin) throw new Error('Asigna un PIN para que pueda registrarse desde el celular');
+    await api(nuevo ? '/empleados' : '/empleados/' + e.id, { method: nuevo ? 'POST' : 'PUT', body: d });
+    toast('Empleado guardado'); route();
+  });
+}
+
+views.dispositivos = { title: 'Checadores', async render(el) {
+  await loadCatalogos();
+  const list = await api('/dispositivos');
+  const host = location.hostname, port = location.port || (location.protocol === 'https:' ? '443' : '80');
+  el.innerHTML = `
+    <div class="toolbar"><button class="btn primary" id="add-zk">＋ Agregar ZKTeco</button><button class="btn primary" id="add-hik">＋ Agregar Hikvision</button></div>
+    ${list.length ? `<div class="table-wrap" style="margin-bottom:16px"><table><thead><tr><th>Nombre</th><th>Marca</th><th>Serie</th><th>Sede</th><th>Estado</th><th>IP</th><th>Último contacto</th><th class="num">Registros</th><th></th></tr></thead><tbody>
+    ${list.map((d) => `<tr><td><b>${esc(d.nombre)}</b></td><td>${d.marca === 'zkteco' ? 'ZKTeco' : 'Hikvision'}</td><td class="mono">${esc(d.serie || '')}</td>
+      <td>${esc(d.sede || '')}</td><td>${d.estado === 'activo' ? '<span class="badge ok">Activo</span>' : d.estado === 'pendiente' ? '<span class="badge warn">Pendiente</span>' : '<span class="badge">Inactivo</span>'}</td>
+      <td class="mono small">${esc(d.ip || '')}</td><td class="small">${esc(d.ultimo_contacto || 'nunca')}</td><td class="num">${d.total_registros}</td>
+      <td>${d.estado === 'pendiente' ? `<button class="btn sm primary" data-ok="${d.id}">Aprobar</button> ` : ''}
+        ${d.marca === 'hikvision' ? `<button class="btn sm" data-url="${d.id}">URL</button> ` : ''}<button class="btn sm" data-ed="${d.id}">Editar</button> <button class="btn sm danger" data-del="${d.id}">Quitar</button></td></tr>`).join('')}
+    </tbody></table></div>` : ''}
+    <div class="grid two">
+      <div class="card"><h2>Configurar un ZKTeco (ADMS / PUSH)</h2><div class="help"><ol>
+        <li>En el checador: <b>Menú → Comunicación → Servidor en la nube / ADMS</b> (<i>Cloud Server Setting</i>).</li>
+        <li>Dirección del servidor: <code>${esc(host)}</code> · Puerto: <code>${esc(port)}</code> · HTTPS/Proxy: desactivado (salvo que publiquen el sitio con HTTPS).</li>
+        <li>Al guardar, el equipo aparecerá aquí como <b>Pendiente</b> con su número de serie. Presiona <b>Aprobar</b>. También puedes darlo de alta antes con su SN.</li>
+        <li>Al aprobarlo descarga todos los registros que tenga en memoria; los duplicados se descartan solos.</li>
+      </ol><p class="small" style="margin:8px 0 0">El modelo debe soportar ADMS / PUSH (la mayoría de los equipos actuales: SpeedFace, ProFace, MB, iClock, K, uFace, etc.). Para equipos viejos sin ADMS usa <a href="#/importar">Importar</a>.</p></div></div>
+      <div class="card"><h2>Configurar un Hikvision (HTTP Listening)</h2><div class="help"><ol>
+        <li>Agrega el equipo aquí con <b>＋ Agregar Hikvision</b> y copia la URL que se genera.</li>
+        <li>En la página web del equipo: <b>Configuración → Red → Configuración avanzada → HTTP Listening</b> (en otros firmwares: <i>Event → Alarm Server / Centro de alarmas</i>).</li>
+        <li>IP de destino: <code>${esc(host)}</code>, puerto <code>${esc(port)}</code>, protocolo HTTP, URL: <code>/hikvision/&lt;token&gt;</code>.</li>
+        <li>Activa <b>Notificar al centro de vigilancia</b> en los eventos de control de acceso / autenticación.</li>
+      </ol><p class="small" style="margin:8px 0 0">El ID de empleado del equipo (Employee No.) debe coincidir con el número del empleado aquí. Para cargar historial anterior exporta desde iVMS-4200 o HikCentral y usa <a href="#/importar">Importar</a>.</p></div></div>
+    </div>`;
+  const sedesOpt = (v) => sel('sede_id', opts(state.cat.sedes, v, '— Sin sede —'));
+  $('#add-zk', el).onclick = () => modal('Agregar checador ZKTeco', `
+    ${field('Nombre', inp('nombre', '', 'required placeholder="Ej. Recepción oficina CDMX"'), true)}
+    ${field('Número de serie (SN)', inp('serie', '', 'required placeholder="Ej. CGXH201260045"'))}${field('Sede', sedesOpt())}`,
+    async (d) => { await api('/dispositivos', { method: 'POST', body: { ...d, marca: 'zkteco' } }); toast('Checador agregado'); route(); });
+  $('#add-hik', el).onclick = () => modal('Agregar checador Hikvision', `
+    ${field('Nombre', inp('nombre', '', 'required placeholder="Ej. Acceso planta"'), true)}
+    ${field('Número de serie (opcional)', inp('serie'))}${field('Sede', sedesOpt())}`,
+    async (d) => { const r = await api('/dispositivos', { method: 'POST', body: { ...d, marca: 'hikvision' } }); await route(); mostrarUrl(r.id); });
+  const byId = (id) => list.find((x) => x.id == id);
+  const mostrarUrl = async (id) => {
+    const d = (await api('/dispositivos')).find((x) => x.id == id);
+    modal('URL de recepción para ' + d.nombre, `<div class="full">
+      <p>Configura esto en <b>HTTP Listening</b> del equipo Hikvision:</p>
+      <p>IP / dominio: <code>${esc(host)}</code> · Puerto: <code>${esc(port)}</code></p>
+      <p>URL: <code>/hikvision/${esc(d.token)}</code></p>
+      <p class="small muted">URL completa: <code>${esc(location.origin)}/hikvision/${esc(d.token)}</code><br>Trátala como contraseña: quien la conozca puede enviar registros a nombre de este equipo.</p></div>`, null);
+  };
+  el.querySelectorAll('[data-url]').forEach((b) => b.onclick = () => mostrarUrl(b.dataset.url));
+  el.querySelectorAll('[data-ok]').forEach((b) => b.onclick = async () => { await api('/dispositivos/' + b.dataset.ok, { method: 'PUT', body: { estado: 'activo' } }); toast('Checador aprobado'); route(); });
+  el.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+    if (!confirmar('¿Quitar este checador? Los registros ya recibidos se conservan.')) return;
+    await api('/dispositivos/' + b.dataset.del, { method: 'DELETE' }); route();
+  });
+  el.querySelectorAll('[data-ed]').forEach((b) => b.onclick = () => {
+    const d = byId(b.dataset.ed);
+    modal('Editar checador', `${field('Nombre', inp('nombre', d.nombre, 'required'), true)}
+      ${field('Número de serie', inp('serie', d.serie))}${field('Sede', sedesOpt(d.sede_id))}
+      ${field('Estado', sel('estado', ['activo', 'pendiente', 'inactivo'].map((s) => `<option ${d.estado === s ? 'selected' : ''}>${s}</option>`).join('')))}
+      ${d.marca === 'hikvision' ? `<label class="f full"><span><input type="checkbox" name="regenerar_token" value="1"> Generar nueva URL (la anterior dejará de funcionar)</span></label>` : ''}`,
+    async (x) => { await api('/dispositivos/' + d.id, { method: 'PUT', body: { ...x, regenerar_token: !!x.regenerar_token } }); toast('Guardado'); route(); });
+  });
+} };
+
+views.importar = { title: 'Importar registros', async render(el) {
+  el.innerHTML = `
+    <div class="card" style="max-width:860px">
+      <h2>Cargar archivo CSV de checadas</h2>
+      <p class="muted">Sirve para equipos sin conexión ADMS, para recuperar historial o para cargar exportaciones de <b>ZKTime / ZKBio</b>, <b>iVMS-4200</b> o <b>HikCentral</b>.
+      En Excel usa <i>Guardar como → CSV UTF-8</i>. Se necesita una columna con el número de empleado y otra con la fecha y hora (o "Fecha" y "Hora" por separado).</p>
+      <p class="small muted">Ejemplo de plantilla: <code>numero,fecha_hora,tipo</code> · <code>1024,2026-11-20 08:57,entrada</code></p>
+      <div class="toolbar"><input type="file" id="file" accept=".csv,.txt,text/csv"><button class="btn primary" id="prev" disabled>Revisar archivo</button></div>
+      <div id="out"></div>
+    </div>`;
+  let contenido = '';
+  $('#file', el).onchange = async (e) => { const f = e.target.files[0]; if (!f) return; contenido = await f.text(); $('#prev', el).disabled = false; $('#out', el).innerHTML = ''; };
+  const run = async (confirmarImp) => {
+    try {
+      const r = await api('/importar', { method: 'POST', body: { contenido, confirmar: confirmarImp } });
+      $('#out', el).innerHTML = `
+        <div class="help" style="margin:10px 0">Columnas detectadas: número = <b>${esc(r.columnas.numero)}</b>, fecha/hora = <b>${esc(r.columnas.fecha_hora)}</b>${r.columnas.tipo ? `, tipo = <b>${esc(r.columnas.tipo)}</b>` : ''}.<br>
+        ${r.total} registros válidos${confirmarImp ? `, <b>${r.nuevos} nuevos importados</b> (${r.total - r.nuevos} ya existían)` : ''}.
+        ${r.errores.length ? `<br><span style="color:var(--bad)">${r.errores.length} filas con errores.</span>` : ''}
+        ${r.sin_empleado.length ? `<br>⚠️ ${r.sin_empleado.length} números no están dados de alta como empleados: ${r.sin_empleado.slice(0, 20).map(esc).join(', ')}${r.sin_empleado.length > 20 ? '…' : ''}` : ''}</div>
+        ${confirmarImp ? '' : `<div class="table-wrap"><table><thead><tr><th>No. empleado</th><th>Fecha y hora</th><th>Tipo</th></tr></thead><tbody>
+          ${r.muestra.map((x) => `<tr><td>${esc(x.empleado_numero)}</td><td>${esc(x.fecha_hora)}</td><td>${esc(x.tipo || '')}</td></tr>`).join('')}</tbody></table></div>
+          <p class="small muted">Vista previa de las primeras 10 filas.</p><button class="btn primary" id="go">Importar ${r.total} registros</button>`}
+        ${r.errores.length ? `<details style="margin-top:10px"><summary>Ver errores</summary><pre class="small">${r.errores.map(esc).join('\n')}</pre></details>` : ''}`;
+      $('#go', el) && ($('#go', el).onclick = () => run(true));
+      if (confirmarImp) toast(`${r.nuevos} registros importados`);
+    } catch (e) { $('#out', el).innerHTML = `<div class="help" style="margin-top:10px;color:var(--bad)">${esc(e.message)}</div>`; }
+  };
+  $('#prev', el).onclick = () => run(false);
+} };
+
+views.catalogos = { title: 'Empresas, sedes y horarios', async render(el, q) {
+  await loadCatalogos();
+  const tab = q.tab || 'empresas';
+  const { empresas, sedes, horarios } = state.cat;
+  const DIAS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+  el.innerHTML = `<div class="tabs">${[['empresas', 'Empresas'], ['sedes', 'Sedes y geocercas'], ['horarios', 'Horarios']].map(([k, t]) => `<button data-tab="${k}" class="${tab === k ? 'active' : ''}">${t}</button>`).join('')}</div><div id="tab"></div>`;
+  el.querySelectorAll('[data-tab]').forEach((b) => b.onclick = () => { location.hash = '#/catalogos?tab=' + b.dataset.tab; });
+  const t = $('#tab', el);
+  const delBtn = (ent, id) => `<button class="btn sm danger" data-del="${ent}/${id}">Eliminar</button>`;
+  if (tab === 'empresas') {
+    t.innerHTML = `<div class="toolbar"><button class="btn primary" id="add">＋ Nueva empresa</button></div>
+      <div class="table-wrap"><table><thead><tr><th>Empresa</th><th></th></tr></thead><tbody>
+      ${empresas.map((e) => `<tr><td><b>${esc(e.nombre)}</b></td><td style="text-align:right"><button class="btn sm" data-ed="${e.id}">Editar</button> ${delBtn('empresas', e.id)}</td></tr>`).join('')}</tbody></table></div>`;
+    const form = (e = {}) => modal(e.id ? 'Editar empresa' : 'Nueva empresa', field('Nombre', inp('nombre', e.nombre, 'required'), true),
+      async (d) => { await api(e.id ? '/empresas/' + e.id : '/empresas', { method: e.id ? 'PUT' : 'POST', body: d }); route(); });
+    $('#add', t).onclick = () => form();
+    t.querySelectorAll('[data-ed]').forEach((b) => b.onclick = () => form(empresas.find((x) => x.id == b.dataset.ed)));
+  }
+  if (tab === 'sedes') {
+    t.innerHTML = `<div class="toolbar"><button class="btn primary" id="add">＋ Nueva sede</button></div>
+      <div class="help" style="margin-bottom:12px">La <b>geocerca</b> es la ubicación de la sede y un radio en metros. Cuando alguien de campo checa fuera de ese radio, el registro se guarda pero queda marcado como <b>Fuera de geocerca</b>. Para personal que se mueve entre clientes, crea una sede por cliente o deja la sede sin coordenadas para no validar la ubicación.</div>
+      ${sedes.length ? `<div class="table-wrap"><table><thead><tr><th>Sede</th><th>Empresa</th><th>Dirección</th><th>Coordenadas</th><th class="num">Radio</th><th></th></tr></thead><tbody>
+      ${sedes.map((s) => `<tr><td><b>${esc(s.nombre)}</b></td><td>${esc(s.empresa || '')}</td><td class="small">${esc(s.direccion || '')}</td>
+        <td>${s.lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${s.lat},${s.lng}">${s.lat.toFixed(5)}, ${s.lng.toFixed(5)}</a>` : '<span class="muted">Sin geocerca</span>'}</td>
+        <td class="num">${s.radio_m || ''} m</td><td style="text-align:right"><button class="btn sm" data-ed="${s.id}">Editar</button> ${delBtn('sedes', s.id)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty card">Sin sedes</div>'}`;
+    const form = (s = {}) => {
+      const m = modal(s.id ? 'Editar sede' : 'Nueva sede', `
+        ${field('Nombre', inp('nombre', s.nombre, 'required'))}${field('Empresa', sel('empresa_id', opts(empresas, s.empresa_id, '— Selecciona —')))}
+        ${field('Dirección', inp('direccion', s.direccion), true)}
+        ${field('Latitud', inp('lat', s.lat ?? '', 'inputmode="decimal" placeholder="19.4326"'))}${field('Longitud', inp('lng', s.lng ?? '', 'inputmode="decimal" placeholder="-99.1332"'))}
+        ${field('Radio de geocerca (m)', inp('radio_m', s.radio_m ?? 200, 'type="number" min="20" max="20000"'))}
+        <div class="f full"><button type="button" class="btn sm" id="gps">📍 Usar mi ubicación actual</button><span class="small muted">Tip: en Google Maps haz clic derecho sobre el lugar para copiar las coordenadas.</span></div>`,
+      async (d) => {
+        d.lat = d.lat === '' ? null : Number(d.lat); d.lng = d.lng === '' ? null : Number(d.lng); d.radio_m = Number(d.radio_m) || 200;
+        if ((d.lat == null) !== (d.lng == null)) throw new Error('Captura latitud y longitud, o deja ambas vacías');
+        await api(s.id ? '/sedes/' + s.id : '/sedes', { method: s.id ? 'PUT' : 'POST', body: d }); route();
+      });
+      $('#gps', m).onclick = () => navigator.geolocation.getCurrentPosition(
+        (p) => { m.querySelector('[name=lat]').value = p.coords.latitude.toFixed(6); m.querySelector('[name=lng]').value = p.coords.longitude.toFixed(6); },
+        (e) => toast('No se pudo obtener la ubicación: ' + e.message, true), { enableHighAccuracy: true });
+    };
+    $('#add', t).onclick = () => form();
+    t.querySelectorAll('[data-ed]').forEach((b) => b.onclick = () => form(sedes.find((x) => x.id == b.dataset.ed)));
+  }
+  if (tab === 'horarios') {
+    t.innerHTML = `<div class="toolbar"><button class="btn primary" id="add">＋ Nuevo horario</button></div>
+      <div class="table-wrap"><table><thead><tr><th>Horario</th><th>Entrada</th><th>Salida</th><th class="num">Tolerancia</th><th>Días laborables</th><th></th></tr></thead><tbody>
+      ${horarios.map((h) => `<tr><td><b>${esc(h.nombre)}</b></td><td>${esc(h.entrada)}</td><td>${esc(h.salida)}</td><td class="num">${h.tolerancia_min} min</td>
+        <td>${String(h.dias || '').split(',').filter(Boolean).map((d) => DIAS[d]).join(', ')}</td>
+        <td style="text-align:right"><button class="btn sm" data-ed="${h.id}">Editar</button> ${delBtn('horarios', h.id)}</td></tr>`).join('')}</tbody></table></div>`;
+    const form = (h = { dias: '1,2,3,4,5', tolerancia_min: 10 }) => modal(h.id ? 'Editar horario' : 'Nuevo horario', `
+      ${field('Nombre', inp('nombre', h.nombre, 'required placeholder="Ej. Oficina L-V 9 a 18"'), true)}
+      ${field('Hora de entrada', `<input type="time" name="entrada" value="${esc(h.entrada || '09:00')}" required>`)}
+      ${field('Hora de salida', `<input type="time" name="salida" value="${esc(h.salida || '18:00')}" required>`)}
+      ${field('Tolerancia (min)', inp('tolerancia_min', h.tolerancia_min, 'type="number" min="0" max="120"'))}
+      <div class="f full">Días laborables<div style="display:flex;gap:10px;flex-wrap:wrap;color:var(--text)">
+        ${DIAS.map((d, i) => `<label><input type="checkbox" name="d${i}" ${String(h.dias).split(',').includes(String(i)) ? 'checked' : ''}> ${d}</label>`).join('')}</div></div>`,
+    async (d) => {
+      const dias = DIAS.map((_, i) => (d['d' + i] ? i : null)).filter((x) => x !== null).join(',');
+      await api(h.id ? '/horarios/' + h.id : '/horarios', { method: h.id ? 'PUT' : 'POST', body: { nombre: d.nombre, entrada: d.entrada, salida: d.salida, tolerancia_min: Number(d.tolerancia_min) || 0, dias } });
+      route();
+    });
+    $('#add', t).onclick = () => form();
+    t.querySelectorAll('[data-ed]').forEach((b) => b.onclick = () => form(horarios.find((x) => x.id == b.dataset.ed)));
+  }
+  t.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+    if (!confirmar('¿Eliminar? Sólo es posible si no tiene empleados u otra información asociada.')) return;
+    try { await api('/' + b.dataset.del, { method: 'DELETE' }); route(); } catch (e) { toast(e.message, true); }
+  });
+} };
+
+views.usuarios = { title: 'Usuarios del sistema', async render(el) {
+  await loadCatalogos();
+  const list = await api('/usuarios');
+  el.innerHTML = `<div class="toolbar"><button class="btn primary" id="add">＋ Nuevo usuario</button></div>
+    <div class="help" style="margin-bottom:12px"><b>Administrador</b>: acceso total. <b>Supervisor</b>: consulta asistencia y registros y captura registros manuales; si se le asigna una empresa sólo ve a esa empresa.</div>
+    <div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Empresa</th><th></th></tr></thead><tbody>
+    ${list.map((u) => `<tr><td class="mono">${esc(u.usuario)}</td><td>${esc(u.nombre || '')}</td><td><span class="badge ${u.rol === 'admin' ? 'pri' : ''}">${u.rol === 'admin' ? 'Administrador' : 'Supervisor'}</span></td>
+      <td>${esc(u.empresa || 'Todas')}</td><td style="text-align:right"><button class="btn sm" data-ed="${u.id}">Editar</button> ${u.id === state.me.id ? '' : `<button class="btn sm danger" data-del="${u.id}">Eliminar</button>`}</td></tr>`).join('')}</tbody></table></div>`;
+  const form = (u = {}) => modal(u.id ? 'Editar usuario' : 'Nuevo usuario', `
+    ${field('Usuario', inp('usuario', u.usuario, `required ${u.id ? 'disabled' : ''} autocomplete="off"`))}${field('Nombre', inp('nombre', u.nombre))}
+    ${field('Rol', sel('rol', `<option value="supervisor" ${u.rol === 'supervisor' ? 'selected' : ''}>Supervisor</option><option value="admin" ${u.rol === 'admin' ? 'selected' : ''}>Administrador</option>`))}
+    ${field('Empresa (supervisor)', sel('empresa_id', opts(state.cat.empresas, u.empresa_id, 'Todas')))}
+    ${field(u.id ? 'Nueva contraseña (opcional)' : 'Contraseña (mín. 8)', inp('password', '', `type="password" autocomplete="new-password" ${u.id ? '' : 'required'} minlength="8"`), true)}`,
+  async (d) => { if (!d.password) delete d.password; await api(u.id ? '/usuarios/' + u.id : '/usuarios', { method: u.id ? 'PUT' : 'POST', body: d }); toast('Usuario guardado'); route(); });
+  $('#add', el).onclick = () => form();
+  el.querySelectorAll('[data-ed]').forEach((b) => b.onclick = () => form(list.find((x) => x.id == b.dataset.ed)));
+  el.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => { if (confirmar('¿Eliminar usuario?')) { await api('/usuarios/' + b.dataset.del, { method: 'DELETE' }); route(); } });
+} };
+
+// ---------------- Router ----------------
+async function route() {
+  const [p, query] = (location.hash.slice(2) || 'tablero').split('?');
+  let name = views[p] ? p : 'tablero';
+  if (!isAdmin() && ['dispositivos', 'importar', 'catalogos', 'usuarios'].includes(name)) name = 'tablero';
+  const v = views[name];
+  document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.r === name));
+  $('#title').textContent = v.title;
+  $('#sidebar').classList.remove('open');
+  const el = $('#view');
+  try { await v.render(el, Object.fromEntries(new URLSearchParams(query || ''))); }
+  catch (e) { el.innerHTML = `<div class="empty card" style="color:var(--bad)">${esc(e.message)}</div>`; }
+}
+
+function showLogin() { $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); }
+async function start() {
+  try { state.me = await api('/me'); } catch { return showLogin(); }
+  $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
+  $('#who').textContent = `${state.me.nombre || state.me.usuario} · ${isAdmin() ? 'Administrador' : 'Supervisor'}`;
+  document.querySelectorAll('#nav .adm').forEach((a) => a.classList.toggle('hidden', !isAdmin()));
+  route();
+}
+$('#login-form').onsubmit = async (e) => {
+  e.preventDefault();
+  try { await api('/login', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); $('#login-err').textContent = ''; start(); }
+  catch (err) { $('#login-err').textContent = err.message; }
+};
+$('#btn-logout').onclick = async () => { await api('/logout', { method: 'POST' }); location.hash = ''; showLogin(); };
+$('#btn-pass').onclick = () => modal('Cambiar mi contraseña', `${field('Contraseña actual', inp('actual', '', 'type="password" required'), true)}
+  ${field('Nueva contraseña (mín. 8)', inp('nueva', '', 'type="password" required minlength="8"'), true)}`,
+  async (d) => { await api('/mi-password', { method: 'POST', body: d }); toast('Contraseña actualizada'); });
+$('#menu-btn').onclick = () => $('#sidebar').classList.toggle('open');
+window.addEventListener('hashchange', () => state.me && route());
+start();

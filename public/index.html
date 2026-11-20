@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Control de Asistencia · Grupo Proceso Seguro</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="login" class="login-wrap hidden">
+    <form class="login" id="login-form">
+      <div class="brand" style="color:var(--text);padding:0">
+        <div class="logo" style="color:#fff">PS</div>
+        <div><b>Control de Asistencia</b><span class="muted">Grupo Proceso Seguro</span></div>
+      </div>
+      <label class="f">Usuario<input name="usuario" autocomplete="username" required></label>
+      <label class="f">Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
+      <div class="err-msg" id="login-err"></div>
+      <button class="btn primary" style="justify-content:center">Entrar</button>
+      <a class="small" href="/campo" style="text-align:center">¿Eres personal de campo? Registra tu asistencia aquí</a>
+    </form>
+  </div>
+
+  <div id="app" class="layout hidden">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><div class="logo">PS</div><div><b>Control de Asistencia</b><span>Grupo Proceso Seguro</span></div></div>
+      <nav class="nav" id="nav">
+        <a href="#/tablero" data-r="tablero">📊 Tablero</a>
+        <a href="#/asistencia" data-r="asistencia">🗓️ Asistencia</a>
+        <a href="#/registros" data-r="registros">⏱️ Registros</a>
+        <div class="sep">Administración</div>
+        <a href="#/empleados" data-r="empleados">👥 Empleados</a>
+        <a href="#/dispositivos" data-r="dispositivos" class="adm">🖐️ Checadores</a>
+        <a href="#/importar" data-r="importar" class="adm">📥 Importar</a>
+        <a href="#/catalogos" data-r="catalogos" class="adm">🏢 Empresas y horarios</a>
+        <a href="#/usuarios" data-r="usuarios" class="adm">🔐 Usuarios</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <div class="topbar">
+        <div style="display:flex;gap:10px;align-items:center">
+          <button class="btn menu-btn" id="menu-btn" aria-label="Menú">☰</button>
+          <h1 id="title"></h1>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="muted small" id="who"></span>
+          <button class="btn sm" id="btn-pass">Cambiar contraseña</button>
+          <button class="btn sm" id="btn-logout">Salir</button>
+        </div>
+      </div>
+      <div id="view"></div>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

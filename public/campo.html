@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a2c4d">
+  <title>Checador de Campo · Proceso Seguro</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    body { background: var(--bg); }
+    .wrap { max-width: 460px; margin: 0 auto; padding: 16px; min-height: 100vh; display: flex; flex-direction: column; gap: 14px; }
+    .head { background: linear-gradient(160deg, #0a2c4d, #0e66b0); color: #fff; border-radius: 14px; padding: 18px; }
+    .clock { font-size: 44px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+    .big { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .big button { padding: 22px 10px; font-size: 18px; border-radius: 14px; font-weight: 700; border: 0; color: #fff; cursor: pointer; }
+    .big .in { background: #15803d; } .big .out { background: #b45309; }
+    .big button:disabled { opacity: .5; }
+    .status { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+    .photo-prev { width: 72px; height: 72px; border-radius: 10px; object-fit: cover; border: 1px solid var(--border); }
+    input[type=text], input[type=password] { font-size: 18px; padding: 12px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <section id="v-login" class="hidden">
+    <div class="head"><div style="font-size:13px;opacity:.8">Grupo Proceso Seguro</div><div style="font-size:22px;font-weight:700">Checador de campo</div></div>
+    <form id="f-login" class="card" style="display:grid;gap:12px;margin-top:14px">
+      <label class="f">Número de empleado<input type="text" name="numero" inputmode="numeric" autocomplete="username" required></label>
+      <label class="f">PIN<input type="password" name="pin" inputmode="numeric" autocomplete="current-password" required></label>
+      <div class="err-msg" id="login-err"></div>
+      <button class="btn primary" style="justify-content:center;padding:12px;font-size:16px">Entrar</button>
+      <p class="small muted" style="margin:0">Tu sesión queda guardada en este teléfono por 30 días. Si no tienes PIN, solicítalo a Recursos Humanos.</p>
+    </form>
+  </section>
+
+  <section id="v-main" class="hidden" style="display:flex;flex-direction:column;gap:14px">
+    <div class="head">
+      <div style="display:flex;justify-content:space-between;align-items:start">
+        <div><div style="font-size:18px;font-weight:700" id="nombre"></div><div style="font-size:13px;opacity:.85" id="sub"></div></div>
+        <button class="btn sm" id="salir" style="background:rgba(255,255,255,.15);color:#fff;border-color:transparent">Salir</button>
+      </div>
+      <div class="clock" id="clock">--:--</div>
+      <div style="font-size:13px;opacity:.85" id="fecha"></div>
+    </div>
+
+    <div class="card">
+      <div class="status" id="gps"><span class="dot warn"></span>Obteniendo ubicación…</div>
+      <div class="muted small" id="geo" style="margin-top:6px"></div>
+    </div>
+
+    <div class="card" style="display:flex;gap:12px;align-items:center">
+      <img id="prev" class="photo-prev hidden" alt="Foto">
+      <div style="flex:1">
+        <label class="btn" style="cursor:pointer">📷 Tomar foto (opcional)<input id="foto" type="file" accept="image/*" capture="user" class="hidden"></label>
+        <div class="small muted" style="margin-top:6px">La foto ayuda a validar tu registro.</div>
+      </div>
+    </div>
+    <input type="text" id="nota" placeholder="Comentario (opcional): cliente, actividad…" maxlength="300">
+
+    <div class="big">
+      <button class="in" id="b-in" disabled>Entrada</button>
+      <button class="out" id="b-out" disabled>Salida</button>
+    </div>
+    <div id="msg" class="small" style="min-height:20px;text-align:center"></div>
+
+    <div class="card"><h3>Mis registros de hoy</h3><div id="hoy" class="small muted">Sin registros</div></div>
+  </section>
+</div>
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let pos = null, foto = null, me = null, watchId = null;
+
+async function api(url, body) {
+  const r = await fetch('/api/campo' + url, { method: body ? 'POST' : 'GET', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(d.error || 'Error de conexión'); e.status = r.status; throw e; }
+  return d;
+}
+function showLogin() { $('#v-main').classList.add('hidden'); $('#v-login').classList.remove('hidden'); if (watchId != null) navigator.geolocation.clearWatch(watchId); }
+const dist = (a, b, c, d) => { const R = 6371000, r = (x) => x * Math.PI / 180; const h = Math.sin(r(c - a) / 2) ** 2 + Math.cos(r(a)) * Math.cos(r(c)) * Math.sin(r(d - b) / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); };
+
+function renderGeo() {
+  if (!pos) return;
+  const acc = Math.round(pos.accuracy);
+  $('#gps').innerHTML = `<span class="dot ${acc <= 100 ? 'ok' : 'warn'}"></span>Ubicación lista · precisión ±${acc} m`;
+  const e = me.empleado;
+  if (e.lat != null) {
+    const d = Math.round(dist(pos.latitude, pos.longitude, e.lat, e.lng));
+    const ok = d <= (e.radio_m || 200) + Math.min(acc, 100);
+    $('#geo').innerHTML = ok ? `✅ Estás dentro de la zona de <b>${esc(e.sede)}</b> (${d} m)` : `⚠️ Estás a ${d} m de <b>${esc(e.sede)}</b>. Puedes registrar, pero quedará marcado como fuera de zona.`;
+  } else $('#geo').textContent = e.sede ? `Sede: ${e.sede}` : '';
+  $('#b-in').disabled = $('#b-out').disabled = false;
+}
+function startGPS() {
+  if (!('geolocation' in navigator)) { $('#gps').innerHTML = '<span class="dot bad"></span>Este teléfono no permite obtener la ubicación.'; return; }
+  if (!window.isSecureContext) { $('#gps').innerHTML = '<span class="dot bad"></span>La ubicación requiere que el sitio se abra con https://'; return; }
+  watchId = navigator.geolocation.watchPosition((p) => { pos = p.coords; renderGeo(); },
+    (err) => { $('#gps').innerHTML = `<span class="dot bad"></span>${err.code === 1 ? 'Permiso de ubicación denegado. Actívalo en la configuración del navegador para poder registrar.' : 'No se pudo obtener la ubicación: ' + esc(err.message)}`; },
+    { enableHighAccuracy: true, maximumAge: 15000, timeout: 30000 });
+}
+function renderHoy() {
+  const h = me.hoy;
+  $('#hoy').innerHTML = h.length ? h.map((r) => `<div class="list-row"><span><b>${r.fecha_hora.slice(11, 16)}</b> · ${esc(r.tipo || 'checada')}</span><span>${r.origen === 'campo' ? (r.dentro_geocerca === 0 ? '<span class="badge bad">Fuera de zona</span>' : '<span class="badge ok">Campo</span>') : `<span class="badge pri">${esc(r.origen)}</span>`}</span></div>`).join('') : 'Sin registros';
+  const last = h.filter((r) => r.tipo).slice(-1)[0];
+  $('#b-in').style.outline = !last || last.tipo === 'salida' ? '3px solid #86efac' : '';
+  $('#b-out').style.outline = last && last.tipo === 'entrada' ? '3px solid #fcd34d' : '';
+}
+async function load() {
+  try { me = await api('/me'); } catch (e) { return showLogin(); }
+  $('#v-login').classList.add('hidden'); $('#v-main').classList.remove('hidden');
+  const e = me.empleado;
+  $('#nombre').textContent = e.nombre;
+  $('#sub').textContent = [e.numero, e.empresa, e.h_entrada ? `Horario ${e.h_entrada}–${e.h_salida}` : ''].filter(Boolean).join(' · ');
+  renderHoy(); startGPS();
+}
+function tick() {
+  const n = new Date();
+  $('#clock').textContent = n.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  $('#fecha').textContent = n.toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+}
+setInterval(tick, 1000); tick();
+
+$('#f-login').onsubmit = async (ev) => {
+  ev.preventDefault();
+  try { await api('/login', Object.fromEntries(new FormData(ev.target))); $('#login-err').textContent = ''; load(); }
+  catch (e) { $('#login-err').textContent = e.message; }
+};
+$('#salir').onclick = async () => { await api('/logout', {}); showLogin(); };
+$('#foto').onchange = async (ev) => {
+  const f = ev.target.files[0]; if (!f) return;
+  const img = await createImageBitmap(f);
+  const scale = Math.min(1, 800 / Math.max(img.width, img.height));
+  const c = document.createElement('canvas'); c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  foto = c.toDataURL('image/jpeg', 0.75);
+  $('#prev').src = foto; $('#prev').classList.remove('hidden');
+};
+async function checar(tipo) {
+  if (!pos) return;
+  const last = me.hoy.filter((r) => r.tipo).slice(-1)[0];
+  if (last && last.tipo === tipo && !confirm(`Tu último registro de hoy ya fue de ${tipo}. ¿Registrar otra ${tipo}?`)) return;
+  $('#b-in').disabled = $('#b-out').disabled = true;
+  $('#msg').textContent = 'Enviando…';
+  try {
+    const r = await api('/checar', { tipo, lat: pos.latitude, lng: pos.longitude, precision: pos.accuracy, foto, nota: $('#nota').value });
+    $('#msg').innerHTML = `<b style="color:var(--ok)">✔ ${tipo === 'entrada' ? 'Entrada' : 'Salida'} registrada a las ${r.fecha_hora.slice(11, 16)}</b>${r.dentro_geocerca === 0 ? '<br><span style="color:var(--bad)">Registrado fuera de la zona de tu sede.</span>' : ''}`;
+    foto = null; $('#prev').classList.add('hidden'); $('#foto').value = ''; $('#nota').value = '';
+    me = await api('/me'); renderHoy();
+  } catch (e) {
+    if (e.status === 401) return showLogin();
+    $('#msg').innerHTML = `<span style="color:var(--bad)">${esc(e.message)}</span>`;
+  } finally { $('#b-in').disabled = $('#b-out').disabled = !pos; }
+}
+$('#b-in').onclick = () => checar('entrada');
+$('#b-out').onclick = () => checar('salida');
+load();
+</script>
+</body>
+</html>
