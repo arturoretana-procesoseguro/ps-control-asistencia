@@ -157,6 +157,21 @@ api.get('/empleados', wrap((req, res) => {
                        LEFT JOIN sedes s ON s.id=e.sede_id LEFT JOIN horarios h ON h.id=e.horario_id
                        ${emp ? 'WHERE e.empresa_id = ?' : ''} ORDER BY e.nombre`).all(...(emp ? [Number(emp)] : [])));
 }));
+api.get('/empleados.csv', wrap((req, res) => {
+  const emp = empresaForzada(req, req.query.empresa_id);
+  const rows = db.prepare(`SELECT e.numero, e.nombre, e.puesto, em.nombre empresa, s.nombre sede, h.nombre horario, e.tipo,
+                                  CASE e.activo WHEN 1 THEN 'Activo' ELSE 'Inactivo' END estado, e.odoo_id
+                           FROM empleados e LEFT JOIN empresas em ON em.id=e.empresa_id
+                           LEFT JOIN sedes s ON s.id=e.sede_id LEFT JOIN horarios h ON h.id=e.horario_id
+                           ${emp ? 'WHERE e.empresa_id = ?' : ''} ORDER BY e.nombre`).all(...(emp ? [Number(emp)] : []));
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="empleados.csv"');
+  res.send(U.toCSV([
+    { key: 'numero', label: 'No. empleado' }, { key: 'nombre', label: 'Nombre' }, { key: 'puesto', label: 'Puesto' },
+    { key: 'empresa', label: 'Empresa' }, { key: 'sede', label: 'Sede' }, { key: 'horario', label: 'Horario' },
+    { key: 'tipo', label: 'Tipo' }, { key: 'estado', label: 'Estado' }, { key: 'odoo_id', label: 'ID Odoo' },
+  ], rows));
+}));
 api.post('/empleados', soloAdmin, wrap((req, res) => {
   const b = req.body;
   if (!b.numero || !b.nombre) return res.status(400).json({ error: 'Número y nombre son obligatorios' });

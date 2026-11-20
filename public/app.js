@@ -197,6 +197,7 @@ views.empleados = { title: 'Empleados', async render(el, q) {
       ${field('Buscar', inp('buscar', q.buscar || '', 'placeholder="Nombre o número"'))}
       <label class="f">&nbsp;<span><input type="checkbox" name="inactivos" value="1" ${q.inactivos ? 'checked' : ''}> Mostrar inactivos</span></label>
       <button class="btn">Filtrar</button>
+      <a class="btn" href="/api/empleados.csv">⬇ Exportar CSV</a>
       ${isAdmin() ? '<button type="button" class="btn primary" id="add">＋ Nuevo empleado</button>' : ''}
     </form>
     <div class="help" style="margin-bottom:14px">El <b>número de empleado</b> debe ser igual al ID de usuario dado de alta en el checador ZKTeco ("ID de usuario / PIN") o Hikvision ("ID de empleado / Employee No.").
