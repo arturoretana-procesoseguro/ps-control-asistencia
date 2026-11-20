@@ -42,6 +42,24 @@ Abrir `http://SERVIDOR:8080/` (administración) y `https://SERVIDOR/campo` (pers
 | `ZK_TIMEZONE` | `-6` | Zona horaria que se envía a los ZKTeco |
 | `CAMPO_EXIGIR_FOTO` | `0` | `1` = la foto es obligatoria en registros de campo |
 
+## Instalación en Proxmox (recomendado)
+1. En Proxmox: **Create CT** con plantilla **Debian 12**, 1 CPU, 1 GB RAM, 8 GB de disco. En *Network* usar el bridge de la red de las oficinas (la misma de los checadores) y, de preferencia, **IP fija**. Marcar *Start at boot*.
+2. Entrar a la consola del contenedor como `root` y ejecutar:
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/arturoretana-procesoseguro/ps-control-asistencia/main/deploy/instalar.sh)
+```
+3. El script instala Node.js 22, la aplicación en `/opt/control-asistencia`, los datos en `/var/lib/control-asistencia`, crea el servicio `control-asistencia` (arranca solo y se reinicia si falla) y muestra la dirección y la contraseña de `admin`.
+
+Actualizar a la última versión de GitHub:
+```bash
+bash /opt/control-asistencia/deploy/actualizar.sh
+```
+Ver el registro del servicio: `journalctl -u control-asistencia -f`. Configuración: `/etc/control-asistencia.env`.
+
+**Respaldo**: programar en Proxmox *Datacenter → Backup* un respaldo diario del contenedor.
+
+**Migrar desde una PC**: detener el sistema en la PC (sólo debe correr una instancia, para no duplicar envíos a Odoo), copiar el contenido de su carpeta `data` a `/var/lib/control-asistencia/` y ejecutar `chown -R asistencia:asistencia /var/lib/control-asistencia && systemctl restart control-asistencia`.
+
 ## Publicación recomendada
 - **HTTPS es obligatorio para el personal de campo**: los navegadores de celular sólo entregan la ubicación GPS en sitios `https://`. Publicar detrás de Nginx/Caddy con certificado (p. ej. Let's Encrypt) y un dominio como `asistencia.grupoprocesoseguro.com`.
 - Los checadores ZKTeco y Hikvision pueden seguir usando **HTTP** en el puerto 8080 dentro de la red/VPN de la oficina. Si el servidor está en la nube, abrir sólo ese puerto hacia las IPs públicas de las oficinas.
