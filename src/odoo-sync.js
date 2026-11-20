@@ -74,12 +74,20 @@ async function sincronizarEmpleados(o) {
   const porOdoo = new Map(locales.filter((l) => l.odoo_id).map((l) => [l.odoo_id, l]));
   const porNum = new Map(locales.map((l) => [clave(l.numero), l]));
   const horarioDef = getAjuste('odoo_horario_id');
-  const r = { odoo_total: emps.filter((e) => e.active).length, vinculados: 0, nuevos: [], actualizados: 0, bajas: 0, sin_credencial: [], solo_local: [], conflictos: [] };
+  const r = { odoo_total: emps.filter((e) => e.active).length, vinculados: 0, desvinculados: 0, nuevos: [], actualizados: 0, bajas: 0, sin_credencial: [], solo_local: [], conflictos: [] };
   const usados = new Set();
 
   for (const e of emps) {
-    const loc = porOdoo.get(e.id) || (e.barcode ? porNum.get(clave(e.barcode)) : null);
-    if (!e.barcode && !loc) { if (e.active) r.sin_credencial.push({ id: e.id, nombre: e.name }); continue; }
+    const bc = e.barcode ? clave(e.barcode) : null;
+    const loc = bc ? porNum.get(bc) : null;
+    // El ID de credencial manda: si el vínculo anterior ya no coincide, se deshace.
+    const viejo = porOdoo.get(e.id);
+    if (viejo && viejo !== loc && clave(viejo.numero) !== bc) {
+      db.prepare('UPDATE empleados SET odoo_id = NULL, activo = CASE WHEN length(numero) > 9 THEN 0 ELSE activo END WHERE id = ?').run(viejo.id);
+      viejo.odoo_id = null;
+      r.desvinculados++;
+    }
+    if (!bc) { if (e.active) r.sin_credencial.push({ id: e.id, nombre: e.name }); continue; }
     if (loc && usados.has(loc.id)) { r.conflictos.push(`El número ${loc.numero} está como ID de credencial en más de un empleado de Odoo (${e.name})`); continue; }
     if (loc) {
       usados.add(loc.id);
@@ -97,7 +105,7 @@ async function sincronizarEmpleados(o) {
                                     VALUES (?, ?, ?, ?, ?, 'oficina', 1, ?)`)
         .run(numero, e.name, e.job_title || null, empresaId(m2oNombre(e.company_id)), horarioDef ? Number(horarioDef) : null, e.id).lastInsertRowid);
       usados.add(id);
-      r.nuevos.push({ numero, nombre: e.name });
+      r.nuevos.push({ numero, nombre: e.name, ...(numero.length > 9 ? { aviso: 'ID de credencial de más de 9 caracteres: no cabe en el checador' } : {}) });
       r.vinculados++;
     }
   }
