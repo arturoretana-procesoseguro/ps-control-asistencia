@@ -85,12 +85,14 @@ function calcularAsistencia({ desde, hasta, empresa_id, sede_id, empleado_id, ti
   }
 
   const hoy = nowLocal().slice(0, 10);
+  const festivos = require('./festivos').festivosEntre(desde, hasta);
   const filas = [];
   for (let d = desde; d <= hasta; d = addDays(d, 1)) {
     const dow = new Date(d + 'T12:00:00Z').getUTCDay();
     for (const e of empleados) {
       const punches = porEmpDia.get(e.numero + '|' + d) || [];
-      const laborable = !!e.h_entrada && String(e.dias || '').split(',').map(Number).includes(dow);
+      const festivo = require('./festivos').festivoPara(festivos, d, e.empresa_id);
+      const laborable = !festivo && !!e.h_entrada && String(e.dias || '').split(',').map(Number).includes(dow);
       const fila = {
         fecha: d, empleado_id: e.id, numero: e.numero, nombre: e.nombre, empresa: e.empresa, sede: e.sede,
         tipo_empleado: e.tipo, horario: e.h_entrada ? `${e.h_entrada}-${e.h_salida}` : '',
@@ -98,12 +100,13 @@ function calcularAsistencia({ desde, hasta, empresa_id, sede_id, empleado_id, ti
         origen: [...new Set(punches.map((p) => p.origen))].join(', '),
         fuera_geocerca: punches.some((p) => p.dentro_geocerca === 0), estado: '', incidencias: [],
         puesto: e.puesto, curp: e.curp, rfc: e.rfc, nss: e.nss, empresa_id: e.empresa_id,
-        descanso_min: 0, efectivas: '', extra: 0, manuales: punches.filter((p) => p.origen === 'manual').length, pares: [],
+        descanso_min: 0, efectivas: '', extra: 0, manuales: punches.filter((p) => p.origen === 'manual').length, pares: [], festivo,
       };
       if (!punches.length) {
         const p1 = primera.get(e.numero);
         if (!p1) fila.estado = 'Sin registros';            // nunca ha checado: no se cuenta como falta
         else if (d < p1) fila.estado = 'Sin historial';
+        else if (festivo) fila.estado = 'Festivo';
         else if (!laborable) fila.estado = 'Descanso';
         else if (d > hoy) fila.estado = 'Pendiente';
         else if (d === hoy && minOf(nowLocal()) < toMin(e.h_entrada) + e.tolerancia_min) fila.estado = 'Pendiente';
@@ -128,7 +131,10 @@ function calcularAsistencia({ desde, hasta, empresa_id, sede_id, empleado_id, ti
       fila.extra = Number((laborable ? (pactada != null ? Math.max(0, ef - pactada) : 0) : ef).toFixed(2));
       if (j.incompleto && punches.length > 1 && j.pares.length > 1) fila.incidencias.push('Checadas incompletas');
       if (fila.manuales) fila.incidencias.push(`${fila.manuales} registro(s) manual(es)`);
-      if (!laborable) {
+      if (festivo) {
+        fila.estado = 'Festivo trabajado';
+        fila.incidencias.push(`Trabajó en día de descanso obligatorio: ${festivo} (LFT art. 75: salario doble adicional)`);
+      } else if (!laborable) {
         fila.estado = 'Día no laborable';
       } else {
         const limite = toMin(e.h_entrada) + Number(e.tolerancia_min || 0);
@@ -156,6 +162,8 @@ function resumen(filas) {
     else if (f.estado === 'Descanso') r.descanso++;
     else if (f.estado === 'Pendiente') r.pendientes++;
     else if (f.estado === 'Sin registros' || f.estado === 'Sin historial') r.sin_registros = (r.sin_registros || 0) + 1;
+    else if (f.estado === 'Festivo') r.festivo = (r.festivo || 0) + 1;
+    if (f.estado === 'Festivo trabajado') r.festivo_trabajado = (r.festivo_trabajado || 0) + 1;
     if (f.fuera_geocerca) r.fuera_geocerca++;
     if (f.incidencias.includes('Sin registro de salida')) r.sin_salida++;
   }
@@ -208,7 +216,7 @@ const AGRUPAR = {
 const METRICAS = {
   laborables: 'Días laborables', asistencias: 'Asistencias', faltas: 'Faltas', retardos: 'Retardos', min_retardo: 'Minutos de retardo',
   horas: 'Horas efectivas', extra: 'Horas extra', pct_asistencia: '% asistencia', pct_puntualidad: '% puntualidad',
-  sin_salida: 'Sin registro de salida', fuera_geocerca: 'Fuera de geocerca', manuales: 'Registros manuales', personas: 'Personas',
+  sin_salida: 'Sin registro de salida', fuera_geocerca: 'Fuera de geocerca', manuales: 'Registros manuales', personas: 'Personas', festivos_trabajados: 'Festivos trabajados',
 };
 function reportePersonalizado({ desde, hasta, agrupar = 'empleado', empresa_id, sede_id, tipo, estado, empleado_id }) {
   const key = AGRUPAR[agrupar] || AGRUPAR.empleado;
@@ -217,7 +225,7 @@ function reportePersonalizado({ desde, hasta, agrupar = 'empleado', empresa_id, 
   const grupos = new Map();
   for (const f of filas) {
     const [k, etiqueta] = key(f);
-    if (!grupos.has(k)) grupos.set(k, { clave: k, grupo: etiqueta, laborables: 0, asistencias: 0, asist_lab: 0, faltas: 0, retardos: 0, a_tiempo: 0, min_retardo: 0, horas: 0, extra: 0, sin_salida: 0, fuera_geocerca: 0, manuales: 0, _p: new Set() });
+    if (!grupos.has(k)) grupos.set(k, { clave: k, grupo: etiqueta, laborables: 0, asistencias: 0, asist_lab: 0, faltas: 0, retardos: 0, a_tiempo: 0, min_retardo: 0, horas: 0, extra: 0, sin_salida: 0, fuera_geocerca: 0, manuales: 0, festivos_trabajados: 0, _p: new Set() });
     const g = grupos.get(k);
     const lab = ['A tiempo', 'Retardo', 'Falta'].includes(f.estado);
     g._p.add(f.empleado_id);
@@ -230,13 +238,14 @@ function reportePersonalizado({ desde, hasta, agrupar = 'empleado', empresa_id, 
     if (f.incidencias.includes('Sin registro de salida')) g.sin_salida++;
     if (f.fuera_geocerca) g.fuera_geocerca++;
     g.manuales += f.manuales || 0;
+    if (f.estado === 'Festivo trabajado') g.festivos_trabajados++;
   }
   const rows = [...grupos.values()].map((g) => ({
     clave: g.clave, grupo: g.grupo, laborables: g.laborables, asistencias: g.asistencias, faltas: g.faltas, retardos: g.retardos, min_retardo: g.min_retardo,
     horas: Number(g.horas.toFixed(2)), extra: Number(g.extra.toFixed(2)),
     pct_asistencia: g.laborables ? Number(((g.asist_lab / g.laborables) * 100).toFixed(1)) : null,
     pct_puntualidad: g.asist_lab ? Number(((g.a_tiempo / g.asist_lab) * 100).toFixed(1)) : null,
-    sin_salida: g.sin_salida, fuera_geocerca: g.fuera_geocerca, manuales: g.manuales, personas: g._p.size,
+    sin_salida: g.sin_salida, fuera_geocerca: g.fuera_geocerca, manuales: g.manuales, personas: g._p.size, festivos_trabajados: g.festivos_trabajados,
   }));
   return { desde, hasta, agrupar, metricas: METRICAS, rows };
 }

@@ -97,7 +97,7 @@ function periodo(q, hoy) {
   return null;
 }
 
-const SUGERENCIAS = ['¿Quién faltó hoy?', '¿Quién llegó tarde esta semana?', '¿Quién tiene más retardos este mes?', 'Horas extra de la semana pasada', '¿Quién no ha checado hoy?', 'Huellas pendientes', '¿Cómo va Ana López este mes?', 'Semanas sobre el límite legal'];
+const SUGERENCIAS = ['¿Cuál es el próximo día festivo?', '¿Quién faltó hoy?', '¿Quién llegó tarde esta semana?', '¿Quién tiene más retardos este mes?', 'Horas extra de la semana pasada', '¿Quién no ha checado hoy?', 'Huellas pendientes', '¿Cómo va Ana López este mes?', 'Semanas sobre el límite legal'];
 
 function responderLocal(pregunta, { empresaForzada } = {}) {
   const hoy = nowLocal().slice(0, 10);
@@ -127,6 +127,21 @@ function responderLocal(pregunta, { empresaForzada } = {}) {
     return r(`Hay **${pend.length}** personas con huella pendiente y **${h.length - pend.length}** sin huella o sin alta en el checador.`, {
       tabla: { columnas: ['No.', 'Nombre', 'Checador', 'Estado'], filas: h.slice(0, 50).map((x) => [x.numero, x.nombre, x.checador, { pendiente: 'Huella pendiente', sin_huella: 'Sin huella', sin_alta: 'No está en el checador' }[x.estado]]) },
       acciones: [{ label: 'Abrir Huellas', href: '#/huellas' }] });
+  }
+  // ---- días festivos
+  if (/festiv|feriado|dia de descanso obligatorio|puente/.test(q)) {
+    const fs = require('./festivos');
+    const anio = Number(hoy.slice(0, 4));
+    const lista = [...fs.listar(anio), ...fs.listar(anio + 1)].filter((f) => f.fecha >= hoy && (!empresaId || f.empresa_id == null || f.empresa_id === empresaId));
+    const prox = lista[0];
+    const pp = per;
+    const trabajados = pp ? datos.dias({ ...pp, empresa_id: empresaId, estado: 'Festivo trabajado' }) : [];
+    if (pp && /trabaj/.test(q)) return r(trabajados.length ? `**${trabajados.length}** persona(s) trabajaron en día de descanso obligatorio ${pp.txt}${empresaTxt}. Por ley (art. 75) se les paga salario doble además de su salario.` : `Nadie trabajó en día festivo ${pp.txt}${empresaTxt}.`,
+      trabajados.length ? { tabla: { columnas: ['Fecha', 'Nombre', 'Entrada', 'Salida', 'Horas'], filas: trabajados.map((x) => [fechaTxt(x.fecha), x.nombre, x.entrada, x.salida || '—', x.horas ? hmTxt(x.horas) : '—']) } } : {});
+    return r(prox ? `El próximo día festivo es el **${fechaTxt(prox.fecha)}** (${prox.fecha}): ${prox.nombre}.` : 'No hay días festivos próximos registrados.', {
+      tabla: { columnas: ['Fecha', 'Día festivo', 'Tipo'], filas: lista.slice(0, 10).map((f) => [f.fecha, f.nombre, f.tipo === 'ley' ? 'Ley (art. 74)' : 'Empresa' + (f.empresa ? ' · ' + f.empresa : '')]) },
+      acciones: [{ label: 'Administrar días festivos', href: '#/catalogos?tab=festivos' }],
+      sugerencias: ['¿Quién trabajó en día festivo este mes?', '¿Quién faltó hoy?'] });
   }
   // ---- nunca han checado
   if (/nunca (han|ha) checado|sin registros|nunca checan|no tienen checadas/.test(q)) {
@@ -235,6 +250,8 @@ function hallazgos({ empresaForzada } = {}) {
   if (av) out.push({ tipo: 'warn', texto: av.replace(/^⚠ Ojo: /, '') + ' Las faltas de hoy no son confiables.', href: '#/dispositivos' });
   const nunca = sinRegistros(empresaForzada).length;
   if (nunca) out.push({ tipo: 'info', texto: `${nunca} persona(s) activas nunca han checado; no se cuentan como falta.`, href: '#/huellas' });
+  const prox = (() => { const fs = require('./festivos'); const fin = addDays(hoy, 7); return [...fs.festivosEntre(hoy, fin).entries()].map(([f, l]) => ({ fecha: f, nombre: l[0].nombre }))[0]; })();
+  if (prox) out.push({ tipo: 'info', texto: prox.fecha === hoy ? `Hoy es día de descanso obligatorio: ${prox.nombre}. No se cuentan faltas.` : `Próximo día de descanso obligatorio: ${fechaTxt(prox.fecha)} (${prox.nombre}).`, href: '#/catalogos?tab=festivos' });
   const dHoy = t.dias[t.dias.length - 1];
   const laborables = t.dias.slice(0, -1).filter((d) => d.a_tiempo + d.retardo + d.falta > 0);
   const prom = (k) => laborables.length ? laborables.reduce((a, d) => a + d[k], 0) / laborables.length : 0;
@@ -277,7 +294,7 @@ function setConfigIA(b, usuario) {
 
 const SISTEMA = `Eres el asistente de control de asistencia de Grupo Proceso Seguro (México). Respondes en español, de forma breve y clara, a personal de Recursos Humanos.
 Usa SIEMPRE las herramientas para obtener datos; nunca inventes nombres, cifras ni fechas. Si una pregunta es ambigua (por ejemplo, hay varias personas con el mismo nombre), dilo y pide que precise.
-Las fechas van en formato YYYY-MM-DD y la zona horaria es la de la Ciudad de México. Las horas efectivas excluyen el tiempo de comida. La jornada máxima semanal legal es 48 h en 2026, 46 h en 2027, 44 h en 2028, 42 h en 2029 y 40 h desde 2030.
+Las fechas van en formato YYYY-MM-DD y la zona horaria es la de la Ciudad de México. Los días de descanso obligatorio (LFT art. 74) aparecen con estado "Festivo" (no son faltas) o "Festivo trabajado" (art. 75: se paga salario doble adicional). Las horas efectivas excluyen el tiempo de comida. La jornada máxima semanal legal es 48 h en 2026, 46 h en 2027, 44 h en 2028, 42 h en 2029 y 40 h desde 2030.
 Cuando listes varias personas o días, usa una tabla en Markdown. No des consejos legales definitivos; sugiere revisar con el área legal cuando aplique.`;
 
 async function responderClaude(pregunta, historial, { empresaForzada } = {}) {
@@ -301,7 +318,7 @@ async function responderClaude(pregunta, historial, { empresaForzada } = {}) {
       inputSchema: { type: 'object', properties: { desde: fecha, hasta: fecha, empresa_id: idOpc('Id de la empresa (listar_empresas) o null para todas') }, required: ['desde', 'hasta', 'empresa_id'], additionalProperties: false },
       run2: (i) => datos.resumen_periodo({ ...i, empresa_id: emp(i.empresa_id) }) }),
     herramienta({ name: 'dias_por_empleado', description: 'Detalle por día y empleado: entrada, salida, horas efectivas, horas extra, minutos de retardo, estado (A tiempo, Retardo, Falta, Descanso, Pendiente, Día no laborable) e incidencias. Filtra por estado y/o empleado. Máximo 200 filas.',
-      inputSchema: { type: 'object', properties: { desde: fecha, hasta: fecha, empresa_id: idOpc('Id de la empresa (listar_empresas) o null para todas'), empleado_id: idOpc('Id del empleado (buscar_empleado) o null para todos'), estado: { anyOf: [{ type: 'string', enum: ['A tiempo', 'Retardo', 'Falta', 'Descanso', 'Pendiente', 'Día no laborable', 'Sin registros'] }, { type: 'null' }], description: 'Filtrar por estado o null para todos' } }, required: ['desde', 'hasta', 'empresa_id', 'empleado_id', 'estado'], additionalProperties: false },
+      inputSchema: { type: 'object', properties: { desde: fecha, hasta: fecha, empresa_id: idOpc('Id de la empresa (listar_empresas) o null para todas'), empleado_id: idOpc('Id del empleado (buscar_empleado) o null para todos'), estado: { anyOf: [{ type: 'string', enum: ['A tiempo', 'Retardo', 'Falta', 'Descanso', 'Pendiente', 'Día no laborable', 'Sin registros', 'Festivo', 'Festivo trabajado'] }, { type: 'null' }], description: 'Filtrar por estado o null para todos' } }, required: ['desde', 'hasta', 'empresa_id', 'empleado_id', 'estado'], additionalProperties: false },
       run2: (i) => datos.dias({ ...i, empresa_id: emp(i.empresa_id) }) }),
     herramienta({ name: 'reporte_agrupado', description: 'Métricas agregadas por empleado, empresa, sede, puesto, tipo, día, semana, mes o día de la semana: días laborables, asistencias, faltas, retardos, minutos de retardo, horas, horas extra, % asistencia, % puntualidad, sin salida, fuera de geocerca, registros manuales.',
       inputSchema: { type: 'object', properties: { desde: fecha, hasta: fecha, agrupar: { type: 'string', enum: ['empleado', 'empresa', 'sede', 'puesto', 'tipo', 'dia', 'semana', 'mes', 'dia_semana'] }, empresa_id: idOpc('Id de la empresa (listar_empresas) o null para todas'), empleado_id: idOpc('Id del empleado (buscar_empleado) o null para todos') }, required: ['desde', 'hasta', 'agrupar', 'empresa_id', 'empleado_id'], additionalProperties: false },

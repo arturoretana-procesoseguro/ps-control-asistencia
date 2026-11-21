@@ -101,6 +101,11 @@ Pantalla **🔗 Odoo** (sólo administradores). Requiere una **API key** de un u
 - **Conformidad del trabajador**: en `/campo` cada persona (campo con su PIN; oficina con el PIN del checador) revisa su semana cerrada y la confirma; se guarda fecha, IP y un hash del detalle confirmado.
 - Las disposiciones generales de la STPS (exigibles desde el 1 de enero de 2027) podrían precisar requisitos adicionales: revisar con el área legal cuando se publiquen.
 
+## Días festivos (LFT art. 74)
+Los días de descanso obligatorio se calculan automáticamente cada año: 1 de enero, primer lunes de febrero, tercer lunes de marzo, 1 de mayo, 16 de septiembre, tercer lunes de noviembre, 25 de diciembre y el 1 de octubre cada seis años (transmisión del Poder Ejecutivo; 2030, 2036…). En *Empresas y horarios → Días festivos* se agregan los días que otorga la empresa (para todas o para una empresa) y las jornadas electorales.
+- Sin checadas ese día: estado **Festivo** (no es falta).
+- Con checadas: **Festivo trabajado**, con la incidencia del art. 75 (salario doble además del salario) y sus horas como extra. Métrica *Festivos trabajados* en reportes personalizados.
+
 ## Depuración (🧹)
 Deja sólo a los empleados activos. Requiere haber sincronizado con Odoo.
 - **Se conservan**: vinculados con Odoo y activos.

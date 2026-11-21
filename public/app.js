@@ -24,7 +24,7 @@ const isAdmin = () => state.me?.rol === 'admin';
 const opts = (list, sel, empty = 'Todas', label = 'nombre') =>
   `<option value="">${esc(empty)}</option>` + list.map((x) => `<option value="${x.id}" ${String(sel) === String(x.id) ? 'selected' : ''}>${esc(x[label])}</option>`).join('');
 const estadoBadge = (e) => {
-  const c = { 'A tiempo': 'ok', Retardo: 'warn', Falta: 'bad', Descanso: '', Pendiente: 'pri', 'Día no laborable': 'info', 'Sin historial': '', 'Sin registros': '' }[e] ?? '';
+  const c = { 'A tiempo': 'ok', Retardo: 'warn', Falta: 'bad', Descanso: '', Pendiente: 'pri', 'Día no laborable': 'info', 'Sin historial': '', 'Sin registros': '', Festivo: 'info', 'Festivo trabajado': 'warn' }[e] ?? '';
   return `<span class="badge ${c}">${esc(e)}</span>`;
 };
 const origenBadge = (o) => {
@@ -78,7 +78,7 @@ views.asistencia = { title: 'Reporte de asistencia', async render(el, q) {
       ${state.me.empresa_id ? '' : field('Empresa', sel('empresa_id', opts(state.cat.empresas, f.empresa_id)))}
       ${field('Sede', sel('sede_id', opts(state.cat.sedes, f.sede_id)))}
       ${field('Tipo', sel('tipo', `<option value="">Todos</option>${['oficina', 'campo', 'mixto'].map((t) => `<option ${f.tipo === t ? 'selected' : ''}>${t}</option>`).join('')}`))}
-      ${field('Estado', sel('estado', `<option value="">Todos</option>${['A tiempo', 'Retardo', 'Falta', 'Pendiente', 'Descanso', 'Día no laborable'].map((t) => `<option ${f.estado === t ? 'selected' : ''}>${t}</option>`).join('')}`))}
+      ${field('Estado', sel('estado', `<option value="">Todos</option>${['A tiempo', 'Retardo', 'Falta', 'Pendiente', 'Festivo', 'Festivo trabajado', 'Descanso', 'Día no laborable', 'Sin registros'].map((t) => `<option ${f.estado === t ? 'selected' : ''}>${t}</option>`).join('')}`))}
       <button class="btn primary">Consultar</button>
       <a class="btn" href="/api/reporte.csv?${qs(f)}">⬇ Exportar Excel (CSV)</a>
     </form>
@@ -341,7 +341,7 @@ views.catalogos = { title: 'Empresas, sedes y horarios', async render(el, q) {
   const tab = q.tab || 'empresas';
   const { empresas, sedes, horarios } = state.cat;
   const DIAS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
-  el.innerHTML = `<div class="tabs">${[['empresas', 'Empresas'], ['sedes', 'Sedes y geocercas'], ['horarios', 'Horarios']].map(([k, t]) => `<button data-tab="${k}" class="${tab === k ? 'active' : ''}">${t}</button>`).join('')}</div><div id="tab"></div>`;
+  el.innerHTML = `<div class="tabs">${[['empresas', 'Empresas'], ['sedes', 'Sedes y geocercas'], ['horarios', 'Horarios'], ['festivos', 'Días festivos']].map(([k, t]) => `<button data-tab="${k}" class="${tab === k ? 'active' : ''}">${t}</button>`).join('')}</div><div id="tab"></div>`;
   el.querySelectorAll('[data-tab]').forEach((b) => b.onclick = () => { location.hash = '#/catalogos?tab=' + b.dataset.tab; });
   const t = $('#tab', el);
   const delBtn = (ent, id) => `<button class="btn sm danger" data-del="${ent}/${id}">Eliminar</button>`;
@@ -382,6 +382,25 @@ views.catalogos = { title: 'Empresas, sedes y horarios', async render(el, q) {
     };
     $('#add', t).onclick = () => form();
     t.querySelectorAll('[data-ed]').forEach((b) => b.onclick = () => form(sedes.find((x) => x.id == b.dataset.ed)));
+  }
+  if (tab === 'festivos') {
+    const anio = Number(q.anio) || Number(today().slice(0, 4));
+    const lista = await api('/festivos?anio=' + anio);
+    const hoyS = today();
+    t.innerHTML = `<div class="toolbar"><button class="btn sm" data-anio="${anio - 1}">‹ ${anio - 1}</button><b style="font-size:18px">${anio}</b><button class="btn sm" data-anio="${anio + 1}">${anio + 1} ›</button>
+        <button class="btn primary" id="add">＋ Agregar día de la empresa</button></div>
+      <div class="help" style="margin-bottom:12px">Los días de <b>descanso obligatorio por ley</b> (LFT art. 74) se calculan solos cada año. Ese día nadie tiene falta; quien trabaja queda marcado como <b>festivo trabajado</b> porque se le paga salario doble además de su salario (art. 75).
+        Agrega aquí los días que la empresa otorga (por ejemplo Jueves y Viernes Santo, 2 de noviembre, 12 de diciembre) y las <b>jornadas electorales</b> cuando se determinen.</div>
+      <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Día</th><th>Festivo</th><th>Tipo</th><th>Aplica a</th><th></th></tr></thead><tbody>
+      ${lista.map((f) => `<tr style="${f.fecha < hoyS ? 'opacity:.55' : ''}"><td class="mono">${esc(f.fecha)}</td><td>${esc(new Date(f.fecha + 'T12:00:00').toLocaleDateString('es-MX', { weekday: 'long' }))}</td><td><b>${esc(f.nombre)}</b></td>
+        <td>${f.tipo === 'ley' ? '<span class="badge pri">Ley (art. 74)</span>' : '<span class="badge info">Empresa</span>'}</td><td>${esc(f.empresa || 'Todas las empresas')}</td>
+        <td style="text-align:right">${f.tipo === 'empresa' ? `<button class="btn sm danger" data-delf="${f.id}">Quitar</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+    t.querySelectorAll('[data-anio]').forEach((b) => b.onclick = () => { location.hash = `#/catalogos?tab=festivos&anio=${b.dataset.anio}`; });
+    $('#add', t).onclick = () => modal('Día festivo de la empresa', `
+      ${field('Fecha', `<input type="date" name="fecha" required value="${anio}-${hoyS.slice(5)}">`)}${field('Aplica a', sel('empresa_id', opts(empresas, '', 'Todas las empresas')))}
+      ${field('Nombre', inp('nombre', '', 'required placeholder="Ej. Viernes Santo, Jornada electoral…"'), true)}`,
+      async (d) => { await api('/festivos', { method: 'POST', body: { ...d, empresa_id: d.empresa_id ? Number(d.empresa_id) : null } }); toast('Día festivo agregado'); route(); });
+    t.querySelectorAll('[data-delf]').forEach((b) => b.onclick = async () => { if (confirmar('¿Quitar este día festivo?')) { await api('/festivos/' + b.dataset.delf, { method: 'DELETE' }); route(); } });
   }
   if (tab === 'horarios') {
     t.innerHTML = `<div class="toolbar"><button class="btn primary" id="add">＋ Nuevo horario</button></div>
@@ -892,7 +911,7 @@ async function abrirFicha(id, mes) {
   const prev = new Date(yy, mm - 2, 1), next = new Date(yy, mm, 1);
   const ym = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   const offset = (new Date(f.mes + '-01T12:00:00').getDay() + 6) % 7;
-  const cls = { 'A tiempo': ['ok', '✓'], Retardo: ['warn', 'R'], Falta: ['bad', 'F'], Descanso: ['off', ''], 'Día no laborable': ['', 'X'], Pendiente: ['off', ''], 'Sin historial': ['off', ''], 'Sin registros': ['off', ''] };
+  const cls = { 'A tiempo': ['ok', '✓'], Retardo: ['warn', 'R'], Falta: ['bad', 'F'], Descanso: ['off', ''], 'Día no laborable': ['', 'X'], Pendiente: ['off', ''], 'Sin historial': ['off', ''], 'Sin registros': ['off', ''], Festivo: ['', '★'], 'Festivo trabajado': ['warn', '★'] };
   dr.innerHTML = `<div class="dh"><div style="display:flex;justify-content:space-between;gap:10px"><div>
       <div style="font-size:12px;opacity:.8">No. ${esc(e.numero)} · ${esc(e.tipo)}</div><div style="font-size:20px;font-weight:700">${esc(e.nombre)}</div>
       <div style="font-size:13px;opacity:.85">${esc([e.puesto, e.empresa, e.sede].filter(Boolean).join(' · '))}</div></div>
@@ -906,7 +925,7 @@ async function abrirFicha(id, mes) {
       <div class="card"><div class="card-head"><button class="btn sm" data-mes="${ym(prev)}">‹</button><h2>${(() => { const t = new Date(f.mes + '-01T12:00:00').toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }); return t.charAt(0).toUpperCase() + t.slice(1); })()}</h2><button class="btn sm" data-mes="${ym(next)}">›</button></div>
         <div class="cal">${['L', 'M', 'M', 'J', 'V', 'S', 'D'].map((d) => `<div class="h">${d}</div>`).join('')}${'<div></div>'.repeat(offset)}
         ${f.dias.map((d) => { const [c, l] = cls[d.estado] || ['', '']; return `<div class="d ${c}" title="${esc(d.fecha)} · ${esc(d.estado)}${d.entrada ? ` · ${d.entrada}–${d.salida || '?'}` : ''}${d.retardo_min ? ` · ${d.retardo_min} min tarde` : ''}">${Number(d.fecha.slice(8))}<b>${l}</b></div>`; }).join('')}</div>
-        <div class="legend" style="margin:10px 0 0"><span><i style="background:var(--st-good)"></i>✓ A tiempo</span><span><i style="background:var(--st-warn)"></i>R Retardo</span><span><i style="background:var(--st-crit)"></i>F Falta</span><span>X Día no laborable trabajado</span></div></div>
+        <div class="legend" style="margin:10px 0 0"><span><i style="background:var(--st-good)"></i>✓ A tiempo</span><span><i style="background:var(--st-warn)"></i>R Retardo</span><span><i style="background:var(--st-crit)"></i>F Falta</span><span>X Día no laborable trabajado</span><span>★ Día festivo</span></div></div>
       <div class="card"><h2>Últimas checadas</h2>${f.ultimas.length ? f.ultimas.map((u) => `<div class="list-row"><span class="mono">${esc(u.fecha_hora)}</span><span>${esc(u.tipo || '')} ${origenBadge(u.origen)} ${geoBadge(u)}</span></div>`).join('') : '<div class="empty">Sin checadas</div>'}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="#/jornada?empleado_id=${e.id}">📋 Registro de jornada</a><a class="btn" href="#/registros?numero=${encodeURIComponent(e.numero)}">⏱️ Checadas</a>${isAdmin() ? `<button class="btn" id="editar">✏️ Editar</button>` : ''}</div>
     </div>`;
@@ -924,7 +943,7 @@ views.reportes = { title: 'Reportes personalizados', async render(el, q) {
   const hoy = today(), lun = lunesLocal(hoy);
   const presets = { semana: [lun, hoy], pasada: [addDays(lun, -7), addDays(lun, -1)], mes: [hoy.slice(0, 8) + '01', hoy], mes_pasado: [(() => { const d = new Date(hoy.slice(0, 8) + '01T12:00:00'); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 10); })(), addDays(hoy.slice(0, 8) + '01', -1)] };
   const AGR = { empleado: 'Empleado', empresa: 'Empresa', sede: 'Sede', puesto: 'Puesto', tipo: 'Tipo de empleado', dia: 'Día', semana: 'Semana', mes: 'Mes', dia_semana: 'Día de la semana' };
-  const MET = { asistencias: 'Asistencias', faltas: 'Faltas', retardos: 'Retardos', min_retardo: 'Minutos de retardo', horas: 'Horas efectivas', extra: 'Horas extra', pct_asistencia: '% asistencia', pct_puntualidad: '% puntualidad', laborables: 'Días laborables', sin_salida: 'Sin salida', fuera_geocerca: 'Fuera de geocerca', manuales: 'Registros manuales', personas: 'Personas' };
+  const MET = { asistencias: 'Asistencias', faltas: 'Faltas', retardos: 'Retardos', min_retardo: 'Minutos de retardo', horas: 'Horas efectivas', extra: 'Horas extra', pct_asistencia: '% asistencia', pct_puntualidad: '% puntualidad', laborables: 'Días laborables', sin_salida: 'Sin salida', fuera_geocerca: 'Fuera de geocerca', manuales: 'Registros manuales', personas: 'Personas', festivos_trabajados: 'Festivos trabajados' };
   const cfg = { desde: presets.mes[0], hasta: presets.mes[1], agrupar: 'empleado', metricas: ['asistencias', 'faltas', 'retardos', 'horas', 'pct_puntualidad'], grafica: 'retardos', orden: 'retardos', dir: 'desc', empresa_id: '', sede_id: '', tipo: '' };
   const guardados = await api('/reportes/guardados');
   if (q.plantilla) Object.assign(cfg, guardados.find((g) => String(g.id) === q.plantilla)?.config || {});

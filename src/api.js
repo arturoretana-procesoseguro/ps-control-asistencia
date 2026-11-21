@@ -304,6 +304,20 @@ api.post('/huellas/:dev/marcar', soloAdmin, wrap((req, res) => {
   res.json(r);
 }));
 
+// ---------- Días festivos (LFT art. 74) ----------
+const festivos = require('./festivos');
+api.get('/festivos', wrap((req, res) => res.json(festivos.listar(Number(req.query.anio) || Number(U.nowLocal().slice(0, 4))))));
+api.post('/festivos', soloAdmin, wrap((req, res) => {
+  const id = festivos.agregar(req.body || {}, req.user.usuario);
+  U.bitacora(req.user.usuario, 'Alta de día festivo', 'festivo', id, req.body);
+  res.json({ id });
+}));
+api.delete('/festivos/:id', soloAdmin, wrap((req, res) => {
+  festivos.eliminar(req.params.id);
+  U.bitacora(req.user.usuario, 'Eliminación de día festivo', 'festivo', req.params.id);
+  res.json({ ok: true });
+}));
+
 // ---------- Asistente (IA) ----------
 api.post('/asistente', wrapAsync(async (req, res) => {
   const b = req.body || {};
