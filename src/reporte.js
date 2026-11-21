@@ -102,7 +102,8 @@ function calcularAsistencia({ desde, hasta, empresa_id, sede_id, empleado_id, ti
       };
       if (!punches.length) {
         const p1 = primera.get(e.numero);
-        if (p1 && d < p1) fila.estado = 'Sin historial';
+        if (!p1) fila.estado = 'Sin registros';            // nunca ha checado: no se cuenta como falta
+        else if (d < p1) fila.estado = 'Sin historial';
         else if (!laborable) fila.estado = 'Descanso';
         else if (d > hoy) fila.estado = 'Pendiente';
         else if (d === hoy && minOf(nowLocal()) < toMin(e.h_entrada) + e.tolerancia_min) fila.estado = 'Pendiente';
@@ -154,6 +155,7 @@ function resumen(filas) {
     else if (f.estado === 'Falta') r.faltas++;
     else if (f.estado === 'Descanso') r.descanso++;
     else if (f.estado === 'Pendiente') r.pendientes++;
+    else if (f.estado === 'Sin registros' || f.estado === 'Sin historial') r.sin_registros = (r.sin_registros || 0) + 1;
     if (f.fuera_geocerca) r.fuera_geocerca++;
     if (f.incidencias.includes('Sin registro de salida')) r.sin_salida++;
   }

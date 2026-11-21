@@ -24,7 +24,7 @@ const isAdmin = () => state.me?.rol === 'admin';
 const opts = (list, sel, empty = 'Todas', label = 'nombre') =>
   `<option value="">${esc(empty)}</option>` + list.map((x) => `<option value="${x.id}" ${String(sel) === String(x.id) ? 'selected' : ''}>${esc(x[label])}</option>`).join('');
 const estadoBadge = (e) => {
-  const c = { 'A tiempo': 'ok', Retardo: 'warn', Falta: 'bad', Descanso: '', Pendiente: 'pri', 'Día no laborable': 'info', 'Sin historial': '' }[e] ?? '';
+  const c = { 'A tiempo': 'ok', Retardo: 'warn', Falta: 'bad', Descanso: '', Pendiente: 'pri', 'Día no laborable': 'info', 'Sin historial': '', 'Sin registros': '' }[e] ?? '';
   return `<span class="badge ${c}">${esc(e)}</span>`;
 };
 const origenBadge = (o) => {
@@ -892,7 +892,7 @@ async function abrirFicha(id, mes) {
   const prev = new Date(yy, mm - 2, 1), next = new Date(yy, mm, 1);
   const ym = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   const offset = (new Date(f.mes + '-01T12:00:00').getDay() + 6) % 7;
-  const cls = { 'A tiempo': ['ok', '✓'], Retardo: ['warn', 'R'], Falta: ['bad', 'F'], Descanso: ['off', ''], 'Día no laborable': ['', 'X'], Pendiente: ['off', ''], 'Sin historial': ['off', ''] };
+  const cls = { 'A tiempo': ['ok', '✓'], Retardo: ['warn', 'R'], Falta: ['bad', 'F'], Descanso: ['off', ''], 'Día no laborable': ['', 'X'], Pendiente: ['off', ''], 'Sin historial': ['off', ''], 'Sin registros': ['off', ''] };
   dr.innerHTML = `<div class="dh"><div style="display:flex;justify-content:space-between;gap:10px"><div>
       <div style="font-size:12px;opacity:.8">No. ${esc(e.numero)} · ${esc(e.tipo)}</div><div style="font-size:20px;font-weight:700">${esc(e.nombre)}</div>
       <div style="font-size:13px;opacity:.85">${esc([e.puesto, e.empresa, e.sede].filter(Boolean).join(' · '))}</div></div>
@@ -994,7 +994,7 @@ views.reportes = { title: 'Reportes personalizados', async render(el, q) {
 // ---------------- Tablero ----------------
 views.tablero = { title: 'Hoy', async render(el) {
   const [d, t, h] = await Promise.all([api('/dashboard'), api('/tendencia?dias=14'), api('/asistente/hallazgos')]);
-  const r = d.resumen, esperados = r.total - r.descanso;
+  const r = d.resumen, esperados = r.total - r.descanso - (r.sin_registros || 0);
   const icon = { warn: '!', ok: '✓', info: 'i' };
   el.innerHTML = `
     <div class="card ia-card" style="margin-bottom:14px"><div class="card-head"><h2><span class="spark">✦</span> Resumen IA</h2>

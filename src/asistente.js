@@ -60,6 +60,22 @@ const datos = {
   },
 };
 
+/** Checadores activos que no se han sincronizado en los últimos 30 minutos (las faltas de hoy no serían confiables). */
+function checadoresAtrasados() {
+  const limite = new Date(Date.now() - 30 * 60e3);
+  const fmt = (d) => d.toLocaleString('sv-SE', { timeZone: process.env.TZ || 'America/Mexico_City' }).replace('T', ' ');
+  return db.prepare("SELECT nombre, marca, ultimo_contacto FROM dispositivos WHERE estado = 'activo'").all()
+    .filter((d) => d.marca === 'zkteco' && (!d.ultimo_contacto || d.ultimo_contacto < fmt(limite)));
+}
+function avisoSincronizacion() {
+  const a = checadoresAtrasados();
+  return a.length ? `⚠ Ojo: ${a.map((d) => `${d.nombre} (último contacto ${d.ultimo_contacto || 'nunca'})`).join(', ')} no se ha sincronizado en los últimos 30 minutos; las checadas de hoy pueden estar incompletas.` : null;
+}
+function sinRegistros(empresaId) {
+  return db.prepare(`SELECT e.id, e.numero, e.nombre FROM empleados e WHERE e.activo = 1 AND COALESCE(e.archivado,0) = 0 ${empresaId ? 'AND e.empresa_id = ?' : ''}
+    AND NOT EXISTS (SELECT 1 FROM registros r WHERE r.empleado_numero = e.numero) AND NOT EXISTS (SELECT 1 FROM registros_archivo a WHERE a.empleado_numero = e.numero)`).all(...(empresaId ? [empresaId] : []));
+}
+
 // ====================== Motor local ======================
 function periodo(q, hoy) {
   const lun = lunesDe(hoy);
@@ -112,6 +128,12 @@ function responderLocal(pregunta, { empresaForzada } = {}) {
       tabla: { columnas: ['No.', 'Nombre', 'Checador', 'Estado'], filas: h.slice(0, 50).map((x) => [x.numero, x.nombre, x.checador, { pendiente: 'Huella pendiente', sin_huella: 'Sin huella', sin_alta: 'No está en el checador' }[x.estado]]) },
       acciones: [{ label: 'Abrir Huellas', href: '#/huellas' }] });
   }
+  // ---- nunca han checado
+  if (/nunca (han|ha) checado|sin registros|nunca checan|no tienen checadas/.test(q)) {
+    const n = sinRegistros(empresaId);
+    return r(n.length ? `**${n.length}** personas activas nunca han checado. Pueden ser altas recientes sin huella, personal de campo que no usa la app o bajas que siguen activas.` : 'Todas las personas activas tienen checadas. ✅',
+      n.length ? { tabla: { columnas: ['No.', 'Nombre'], filas: n.map((x) => [x.numero, x.nombre]) }, acciones: [{ label: 'Abrir Huellas', href: '#/huellas' }, { label: 'Depuración', href: '#/depurar' }] } : {});
+  }
   // ---- límite legal
   if (/limite|exced|48 horas|46 horas|sobre el limite/.test(q)) {
     const p = per || { desde: addDays(lunesDe(hoy), -28), hasta: hoy, txt: 'las últimas 4 semanas' };
@@ -158,6 +180,9 @@ function responderLocal(pregunta, { empresaForzada } = {}) {
   // ---- faltas
   if (/falt|ausen|no vino|no vinieron/.test(q)) {
     const f = datos.dias({ ...p, empresa_id: empresaId, estado: 'Falta' });
+    const extra = [p.hasta >= hoy ? avisoSincronizacion() : null, (() => { const n = sinRegistros(empresaId).length; return n ? `No incluye a ${n} persona(s) que nunca han checado (por ejemplo, altas recientes sin huella); pregunta “¿quién nunca ha checado?”.` : null; })()].filter(Boolean);
+    if (extra.length) return r((f.length ? `**${f.length}** falta${f.length > 1 ? 's' : ''} ${sufijo}.` : `Nadie faltó ${sufijo}. ✅`) + '\n\n' + extra.join('\n'),
+      f.length ? { tabla: { columnas: ['Fecha', 'No.', 'Nombre', 'Empresa'], filas: f.map((x) => [fechaTxt(x.fecha), x.numero, x.nombre, x.empresa]) } } : {});
     return r(f.length ? `**${f.length}** falta${f.length > 1 ? 's' : ''} ${sufijo}.` : `Nadie faltó ${sufijo}. ✅`,
       f.length ? { tabla: { columnas: ['Fecha', 'No.', 'Nombre', 'Empresa'], filas: f.map((x) => [fechaTxt(x.fecha), x.numero, x.nombre, x.empresa]) } } : {});
   }
@@ -206,6 +231,10 @@ function hallazgos({ empresaForzada } = {}) {
   const hoy = nowLocal().slice(0, 10);
   const t = tendencia({ dias: 14, empresa_id: empresaForzada });
   const out = [];
+  const av = avisoSincronizacion();
+  if (av) out.push({ tipo: 'warn', texto: av.replace(/^⚠ Ojo: /, '') + ' Las faltas de hoy no son confiables.', href: '#/dispositivos' });
+  const nunca = sinRegistros(empresaForzada).length;
+  if (nunca) out.push({ tipo: 'info', texto: `${nunca} persona(s) activas nunca han checado; no se cuentan como falta.`, href: '#/huellas' });
   const dHoy = t.dias[t.dias.length - 1];
   const laborables = t.dias.slice(0, -1).filter((d) => d.a_tiempo + d.retardo + d.falta > 0);
   const prom = (k) => laborables.length ? laborables.reduce((a, d) => a + d[k], 0) / laborables.length : 0;
@@ -256,27 +285,29 @@ async function responderClaude(pregunta, historial, { empresaForzada } = {}) {
   const { betaTool } = require('@anthropic-ai/sdk/helpers/beta/json-schema');
   const cfg = configIA();
   const client = new Anthropic({ apiKey: getAjuste('ia_api_key'), timeout: 120000, maxRetries: 2 });
-  const fecha = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'Fecha YYYY-MM-DD' };
+  const fecha = { type: 'string', description: 'Fecha en formato YYYY-MM-DD' };
+  const idOpc = (desc) => ({ anyOf: [{ type: 'integer' }, { type: 'null' }], description: desc });
   const emp = (id) => (empresaForzada || id || null);
   const json = (x) => JSON.stringify(x);
   const usadas = [];
-  const herramienta = (def) => betaTool({ ...def, strict: true, run: async (input) => { usadas.push(def.name); try { return json(await def.run2(input)); } catch (e) { return json({ error: e.message }); } } });
+  const validarFechas = (i) => { for (const k of ['desde', 'hasta']) if (k in i && !/^\d{4}-\d{2}-\d{2}$/.test(String(i[k]))) throw new Error(`${k} debe tener formato YYYY-MM-DD`); };
+  const herramienta = (def) => betaTool({ ...def, strict: true, run: async (input) => { usadas.push(def.name); try { validarFechas(input); return json(await def.run2(input)); } catch (e) { return json({ error: e.message }); } } });
   const tools = [
     herramienta({ name: 'buscar_empleado', description: 'Busca empleados activos por nombre o número (tolera acentos y nombres incompletos). Devuelve id, número, nombre, puesto y empresa.',
       inputSchema: { type: 'object', properties: { texto: { type: 'string' } }, required: ['texto'], additionalProperties: false },
       run2: ({ texto }) => buscarEmpleados(texto, empresaForzada).map(({ score, ...e }) => e) }),
     herramienta({ name: 'listar_empresas', description: 'Lista las empresas con su id.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, run2: () => empresas() }),
     herramienta({ name: 'resumen_periodo', description: 'Totales de un periodo: asistencias, a tiempo, retardos, faltas, pendientes, sin salida y fuera de geocerca.',
-      inputSchema: { type: 'object', properties: { desde: fecha, hasta: fecha, empresa_id: { type: ['integer', 'null'] } }, required: ['desde', 'hasta', 'empresa_id'], additionalProperties: false },
+      inputSchema: { type: 'object', properties: { desde: fecha, hasta: fecha, empresa_id: idOpc('Id de la empresa (listar_empresas) o null para todas') }, required: ['desde', 'hasta', 'empresa_id'], additionalProperties: false },
       run2: (i) => datos.resumen_periodo({ ...i, empresa_id: emp(i.empresa_id) }) }),
     herramienta({ name: 'dias_por_empleado', description: 'Detalle por día y empleado: entrada, salida, horas efectivas, horas extra, minutos de retardo, estado (A tiempo, Retardo, Falta, Descanso, Pendiente, Día no laborable) e incidencias. Filtra por estado y/o empleado. Máximo 200 filas.',
-      inputSchema: { type: 'object', properties: { desde: fecha, hasta: fecha, empresa_id: { type: ['integer', 'null'] }, empleado_id: { type: ['integer', 'null'] }, estado: { type: ['string', 'null'], enum: ['A tiempo', 'Retardo', 'Falta', 'Descanso', 'Pendiente', 'Día no laborable', null] } }, required: ['desde', 'hasta', 'empresa_id', 'empleado_id', 'estado'], additionalProperties: false },
+      inputSchema: { type: 'object', properties: { desde: fecha, hasta: fecha, empresa_id: idOpc('Id de la empresa (listar_empresas) o null para todas'), empleado_id: idOpc('Id del empleado (buscar_empleado) o null para todos'), estado: { anyOf: [{ type: 'string', enum: ['A tiempo', 'Retardo', 'Falta', 'Descanso', 'Pendiente', 'Día no laborable', 'Sin registros'] }, { type: 'null' }], description: 'Filtrar por estado o null para todos' } }, required: ['desde', 'hasta', 'empresa_id', 'empleado_id', 'estado'], additionalProperties: false },
       run2: (i) => datos.dias({ ...i, empresa_id: emp(i.empresa_id) }) }),
     herramienta({ name: 'reporte_agrupado', description: 'Métricas agregadas por empleado, empresa, sede, puesto, tipo, día, semana, mes o día de la semana: días laborables, asistencias, faltas, retardos, minutos de retardo, horas, horas extra, % asistencia, % puntualidad, sin salida, fuera de geocerca, registros manuales.',
-      inputSchema: { type: 'object', properties: { desde: fecha, hasta: fecha, agrupar: { type: 'string', enum: ['empleado', 'empresa', 'sede', 'puesto', 'tipo', 'dia', 'semana', 'mes', 'dia_semana'] }, empresa_id: { type: ['integer', 'null'] }, empleado_id: { type: ['integer', 'null'] } }, required: ['desde', 'hasta', 'agrupar', 'empresa_id', 'empleado_id'], additionalProperties: false },
+      inputSchema: { type: 'object', properties: { desde: fecha, hasta: fecha, agrupar: { type: 'string', enum: ['empleado', 'empresa', 'sede', 'puesto', 'tipo', 'dia', 'semana', 'mes', 'dia_semana'] }, empresa_id: idOpc('Id de la empresa (listar_empresas) o null para todas'), empleado_id: idOpc('Id del empleado (buscar_empleado) o null para todos') }, required: ['desde', 'hasta', 'agrupar', 'empresa_id', 'empleado_id'], additionalProperties: false },
       run2: (i) => datos.agrupado({ ...i, empresa_id: emp(i.empresa_id) }) }),
     herramienta({ name: 'jornada_semanal', description: 'Horas efectivas por empleado y semana contra la jornada máxima legal, horas extra y si el trabajador confirmó su registro.',
-      inputSchema: { type: 'object', properties: { desde: fecha, hasta: fecha, empresa_id: { type: ['integer', 'null'] }, empleado_id: { type: ['integer', 'null'] } }, required: ['desde', 'hasta', 'empresa_id', 'empleado_id'], additionalProperties: false },
+      inputSchema: { type: 'object', properties: { desde: fecha, hasta: fecha, empresa_id: idOpc('Id de la empresa (listar_empresas) o null para todas'), empleado_id: idOpc('Id del empleado (buscar_empleado) o null para todos') }, required: ['desde', 'hasta', 'empresa_id', 'empleado_id'], additionalProperties: false },
       run2: (i) => datos.semanas({ ...i, empresa_id: emp(i.empresa_id) }) }),
     herramienta({ name: 'huellas_pendientes', description: 'Personas sin huella registrada en los checadores (pendiente, sin huella o sin alta).',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false }, run2: () => datos.huellas_pendientes(empresaForzada) }),
@@ -309,7 +340,11 @@ async function responder(pregunta, historial, opts = {}) {
     try { return await responderClaude(pregunta, historial, opts); }
     catch (e) {
       const Anthropic = (() => { const m = require('@anthropic-ai/sdk'); return m.default || m; })();
-      const motivo = e instanceof Anthropic.AuthenticationError ? 'la API key de Anthropic no es válida'
+      const detalle = (() => { try { return e.error?.error?.message || e.error?.message || ''; } catch { return ''; } })();
+      const motivo = e instanceof Anthropic.AuthenticationError ? `la API key de Anthropic no es válida${detalle ? ': ' + detalle : ''}. Verifica que empiece con sk-ant-api03- y venga de console.anthropic.com → API Keys`
+        : e instanceof Anthropic.PermissionDeniedError ? `la API key no tiene permiso${detalle ? ': ' + detalle : ''}`
+        : e instanceof Anthropic.BadRequestError ? `Anthropic rechazó la solicitud${detalle ? ': ' + detalle : ''} (si menciona créditos o saldo, revisa Billing en console.anthropic.com)`
+        : e instanceof Anthropic.NotFoundError ? `el modelo configurado no existe${detalle ? ': ' + detalle : ''}`
         : e instanceof Anthropic.RateLimitError ? 'se alcanzó el límite de uso de la API'
         : e instanceof Anthropic.APIConnectionError ? 'no hay conexión con Anthropic' : (e.message || 'error desconocido');
       const r = responderLocal(pregunta, opts);
