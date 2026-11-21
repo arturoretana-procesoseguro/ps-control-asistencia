@@ -110,6 +110,13 @@ Deja sólo a los empleados activos. Requiere haber sincronizado con Odoo.
 - Opcional: vaciar la memoria de checadas del equipo (primero se leen sus últimas checadas).
 - Nunca se borran los administradores del checador. Antes de aplicar se guarda un respaldo en `data/respaldos/`. Requiere escribir `DEPURAR` para confirmar.
 
+## Copiloto con IA (✦)
+Interfaz "centro de mando" (oscura por defecto; ◐ cambia a clara) con un **copiloto** siempre disponible a la derecha (Ctrl + K) que responde preguntas en español con los datos del sistema: faltas, retardos, horas trabajadas y extra, salidas sin registrar, huellas pendientes, límite legal de horas y el resumen de cualquier persona o empresa, por periodo ("hoy", "ayer", "esta semana", "el mes pasado", "en octubre", "últimos 7 días").
+- **Motor local** (siempre activo): reglas y estadística dentro del servidor; ningún dato sale de la empresa.
+- **Claude** (opcional, ✦ Inteligencia artificial): con una API key de Anthropic responde preguntas libres usando las mismas consultas como herramientas (SDK oficial `@anthropic-ai/sdk`, modelo configurable, `claude-opus-5-5` por defecto, con respaldo del lado del servidor si el modelo declina). Se envían a Anthropic la pregunta y los datos que la responden. Si falla o no hay internet, responde el motor local.
+- La tarjeta **✦ Resumen IA** del tablero muestra hallazgos del día: retardos por encima del promedio, rachas de retardos, acumulados, cercanía a la jornada máxima y huellas pendientes.
+- Los supervisores sólo obtienen datos de su empresa con ambos motores.
+
 ## Tablero, ficha y reportes (📊)
 - **Tablero**: asistencia de los últimos 14 días (a tiempo, retardo, falta), distribución de horas de llegada, quién acumula más retardos, asistencia por empresa, últimas checadas y estado de checadores.
 - **Ficha del empleado**: al hacer clic en cualquier nombre se abre un panel con su calendario del mes, totales (asistencias, faltas, retardos, horas, puntualidad), estado de huella y últimas checadas.

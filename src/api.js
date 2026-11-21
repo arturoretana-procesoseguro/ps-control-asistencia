@@ -12,6 +12,7 @@ const zkSync = require('./zk-sync');
 const odooSync = require('./odoo-sync');
 const depurar = require('./depurar');
 const huellas = require('./huellas');
+const asistente = require('./asistente');
 
 const FOTOS_DIR = path.join(DATA_DIR, 'fotos');
 fs.mkdirSync(FOTOS_DIR, { recursive: true });
@@ -302,6 +303,15 @@ api.post('/huellas/:dev/marcar', soloAdmin, wrap((req, res) => {
   U.bitacora(req.user.usuario, 'Estado de huella', 'empleado', req.body?.empleado_id, { dispositivo: req.params.dev, estado: req.body?.estado });
   res.json(r);
 }));
+
+// ---------- Asistente (IA) ----------
+api.post('/asistente', wrapAsync(async (req, res) => {
+  const b = req.body || {};
+  res.json(await asistente.responder(b.pregunta, Array.isArray(b.historial) ? b.historial : [], { empresaForzada: req.user.empresa_id || null, motor: b.motor }));
+}));
+api.get('/asistente/hallazgos', wrap((req, res) => res.json({ hallazgos: asistente.hallazgos({ empresaForzada: req.user.empresa_id || null }), ia: asistente.configIA() })));
+api.get('/ia', soloAdmin, wrap((req, res) => res.json(asistente.configIA())));
+api.put('/ia', soloAdmin, wrap((req, res) => res.json(asistente.setConfigIA(req.body || {}, req.user.usuario))));
 
 // ---------- Tablero, ficha de empleado y reportes personalizados ----------
 api.get('/tendencia', wrap((req, res) => res.json(tendencia({ dias: Math.min(Number(req.query.dias) || 14, 62), empresa_id: empresaForzada(req, req.query.empresa_id) }))));

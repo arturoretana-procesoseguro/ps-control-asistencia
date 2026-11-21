@@ -73,6 +73,10 @@ function calcularAsistencia({ desde, hasta, empresa_id, sede_id, empleado_id, ti
     SELECT ${cols} FROM registros WHERE anulado = 0 AND fecha_hora >= ? AND fecha_hora < ?
     ${incluirArchivo ? `UNION SELECT ${cols} FROM registros_archivo WHERE anulado = 0 AND fecha_hora >= ? AND fecha_hora < ?` : ''}
     ORDER BY fecha_hora`).all(...rango, ...(incluirArchivo ? rango : []));
+  // Primera checada de cada persona: antes de ella no se cuentan faltas (aún no trabajaba o no había historial)
+  const primera = new Map(db.prepare(`SELECT empleado_numero n, MIN(fecha_hora) f FROM (
+      SELECT empleado_numero, fecha_hora FROM registros WHERE anulado = 0
+      UNION ALL SELECT empleado_numero, fecha_hora FROM registros_archivo WHERE anulado = 0) GROUP BY empleado_numero`).all().map((r) => [r.n, r.f.slice(0, 10)]));
   const porEmpDia = new Map();
   for (const r of regs) {
     const k = r.empleado_numero + '|' + r.fecha_hora.slice(0, 10);
@@ -97,7 +101,9 @@ function calcularAsistencia({ desde, hasta, empresa_id, sede_id, empleado_id, ti
         descanso_min: 0, efectivas: '', extra: 0, manuales: punches.filter((p) => p.origen === 'manual').length, pares: [],
       };
       if (!punches.length) {
-        if (!laborable) fila.estado = 'Descanso';
+        const p1 = primera.get(e.numero);
+        if (p1 && d < p1) fila.estado = 'Sin historial';
+        else if (!laborable) fila.estado = 'Descanso';
         else if (d > hoy) fila.estado = 'Pendiente';
         else if (d === hoy && minOf(nowLocal()) < toMin(e.h_entrada) + e.tolerancia_min) fila.estado = 'Pendiente';
         else fila.estado = 'Falta';

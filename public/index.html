@@ -3,16 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Control de Asistencia · Grupo Proceso Seguro</title>
+  <title>Asistencia IA · Grupo Proceso Seguro</title>
+  <script>try { const t = localStorage.getItem('tema'); if (t) document.documentElement.dataset.theme = t; } catch {}</script>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <div id="login" class="login-wrap hidden">
     <form class="login" id="login-form">
-      <div class="brand" style="color:var(--text);padding:0">
-        <div class="logo" style="color:#fff">PS</div>
-        <div><b>Control de Asistencia</b><span class="muted">Grupo Proceso Seguro</span></div>
-      </div>
+      <div class="logo-ia"><div class="gem">◆</div><div>ASISTENCIA·IA<small>Grupo Proceso Seguro</small></div></div>
       <label class="f">Usuario<input name="usuario" autocomplete="username" required></label>
       <label class="f">Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
       <div class="err-msg" id="login-err"></div>
@@ -22,40 +20,54 @@
   </div>
 
   <div id="app" class="layout hidden">
+    <header class="topbar-ia">
+      <button class="icon-btn menu-btn" id="menu-btn" aria-label="Menú">☰</button>
+      <div class="logo-ia"><div class="gem">◆</div><div>ASISTENCIA·IA<small>Grupo Proceso Seguro</small></div></div>
+      <button class="cmdbar" id="cmdbar" type="button"><span class="spark">✦</span><span>Pregúntame sobre la asistencia…</span><kbd>Ctrl K</kbd></button>
+      <div class="top-actions">
+        <button class="icon-btn" id="btn-tema" title="Cambiar tema claro/oscuro">◐</button>
+        <button class="icon-btn on" id="btn-copiloto" title="Mostrar u ocultar el copiloto">🤖</button>
+        <button class="icon-btn" id="btn-pass" title="Cambiar contraseña">🔑</button>
+        <button class="icon-btn" id="btn-logout" title="Salir">⏻</button>
+      </div>
+    </header>
     <aside class="sidebar" id="sidebar">
-      <div class="brand"><div class="logo">PS</div><div><b>Control de Asistencia</b><span>Grupo Proceso Seguro</span></div></div>
       <nav class="nav" id="nav">
-        <a href="#/tablero" data-r="tablero">📊 Tablero</a>
-        <a href="#/asistencia" data-r="asistencia">🗓️ Asistencia</a>
-        <a href="#/registros" data-r="registros">⏱️ Registros</a>
-        <a href="#/jornada" data-r="jornada">📋 Registro de jornada</a>
-        <a href="#/reportes" data-r="reportes">📊 Reportes</a>
-        <div class="sep">Administración</div>
-        <a href="#/empleados" data-r="empleados">👥 Empleados</a>
-        <a href="#/huellas" data-r="huellas">☝️ Huellas</a>
-        <a href="#/dispositivos" data-r="dispositivos" class="adm">📟 Checadores</a>
-        <a href="#/importar" data-r="importar" class="adm">📥 Importar</a>
-        <a href="#/odoo" data-r="odoo" class="adm">🔗 Odoo</a>
-        <a href="#/depurar" data-r="depurar" class="adm">🧹 Depuración</a>
-        <a href="#/catalogos" data-r="catalogos" class="adm">🏢 Empresas y horarios</a>
-        <a href="#/usuarios" data-r="usuarios" class="adm">🔐 Usuarios</a>
-        <a href="#/bitacora" data-r="bitacora" class="adm">🧾 Bitácora</a>
+        <a href="#/tablero" data-r="tablero">◉ Hoy</a>
+        <a href="#/asistencia" data-r="asistencia">▦ Asistencia</a>
+        <a href="#/registros" data-r="registros">⏱ Registros</a>
+        <a href="#/jornada" data-r="jornada">☰ Registro de jornada</a>
+        <a href="#/reportes" data-r="reportes">▤ Reportes</a>
+        <div class="sep">Equipo</div>
+        <a href="#/empleados" data-r="empleados">◎ Empleados</a>
+        <a href="#/huellas" data-r="huellas">☝ Huellas</a>
+        <div class="sep adm">Administración</div>
+        <a href="#/dispositivos" data-r="dispositivos" class="adm">⌁ Checadores</a>
+        <a href="#/odoo" data-r="odoo" class="adm">⇄ Odoo</a>
+        <a href="#/ia" data-r="ia" class="adm">✦ Inteligencia artificial</a>
+        <a href="#/importar" data-r="importar" class="adm">⤓ Importar</a>
+        <a href="#/depurar" data-r="depurar" class="adm">⌫ Depuración</a>
+        <a href="#/catalogos" data-r="catalogos" class="adm">▣ Empresas y horarios</a>
+        <a href="#/usuarios" data-r="usuarios" class="adm">⚿ Usuarios</a>
+        <a href="#/bitacora" data-r="bitacora" class="adm">≡ Bitácora</a>
       </nav>
     </aside>
     <main class="main">
       <div class="topbar">
-        <div style="display:flex;gap:10px;align-items:center">
-          <button class="btn menu-btn" id="menu-btn" aria-label="Menú">☰</button>
-          <h1 id="title"></h1>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <span class="muted small" id="who"></span>
-          <button class="btn sm" id="btn-pass">Cambiar contraseña</button>
-          <button class="btn sm" id="btn-logout">Salir</button>
-        </div>
+        <h1 id="title"></h1>
+        <span class="muted small" id="who"></span>
       </div>
       <div id="view"></div>
     </main>
+    <aside class="copilot" id="copilot">
+      <div class="cp-head"><div class="av">✦</div><div><b>Copiloto</b><small id="cp-motor">Motor local</small></div>
+        <button class="icon-btn" id="cp-limpiar" title="Nueva conversación">↺</button></div>
+      <div class="cp-msgs" id="cp-msgs"></div>
+      <div class="cp-in">
+        <form id="cp-form"><textarea id="cp-q" rows="1" placeholder="Pregunta, por ejemplo: ¿quién llegó tarde hoy?"></textarea><button class="send" title="Enviar">➤</button></form>
+        <div class="nota" id="cp-nota">Responde con los datos del sistema. Verifica la información importante.</div>
+      </div>
+    </aside>
   </div>
   <div id="print-area"></div>
   <script src="/app.js"></script>

@@ -24,7 +24,7 @@ const isAdmin = () => state.me?.rol === 'admin';
 const opts = (list, sel, empty = 'Todas', label = 'nombre') =>
   `<option value="">${esc(empty)}</option>` + list.map((x) => `<option value="${x.id}" ${String(sel) === String(x.id) ? 'selected' : ''}>${esc(x[label])}</option>`).join('');
 const estadoBadge = (e) => {
-  const c = { 'A tiempo': 'ok', Retardo: 'warn', Falta: 'bad', Descanso: '', Pendiente: 'pri', 'Día no laborable': 'info' }[e] ?? '';
+  const c = { 'A tiempo': 'ok', Retardo: 'warn', Falta: 'bad', Descanso: '', Pendiente: 'pri', 'Día no laborable': 'info', 'Sin historial': '' }[e] ?? '';
   return `<span class="badge ${c}">${esc(e)}</span>`;
 };
 const origenBadge = (o) => {
@@ -829,7 +829,7 @@ function graficaApilada(cont, datos, series, { etiqueta, alto = 220, titulo } = 
         : `<rect x="${x}" y="${h1}" width="${bw}" height="${hh}" fill="${s.color}"/>`;
     });
     svg += `</g>`;
-    if (datos.length <= 16 || i % Math.ceil(datos.length / 14) === 0) svg += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle">${esc(etiqueta(d))}</text>`;
+    if (i % Math.max(1, Math.ceil(44 / paso)) === 0) svg += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle">${esc(etiqueta(d))}</text>`;
     svg += `<rect class="hit" data-h="${i}" x="${m.l + paso * i}" y="${m.t}" width="${paso}" height="${ih}"/>`;
   });
   cont.innerHTML = `<div class="legend">${[...series].reverse().map((s) => `<span><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join('')}</div>` + svg + '</svg>';
@@ -892,7 +892,7 @@ async function abrirFicha(id, mes) {
   const prev = new Date(yy, mm - 2, 1), next = new Date(yy, mm, 1);
   const ym = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   const offset = (new Date(f.mes + '-01T12:00:00').getDay() + 6) % 7;
-  const cls = { 'A tiempo': ['ok', '✓'], Retardo: ['warn', 'R'], Falta: ['bad', 'F'], Descanso: ['off', ''], 'Día no laborable': ['', 'X'], Pendiente: ['off', ''] };
+  const cls = { 'A tiempo': ['ok', '✓'], Retardo: ['warn', 'R'], Falta: ['bad', 'F'], Descanso: ['off', ''], 'Día no laborable': ['', 'X'], Pendiente: ['off', ''], 'Sin historial': ['off', ''] };
   dr.innerHTML = `<div class="dh"><div style="display:flex;justify-content:space-between;gap:10px"><div>
       <div style="font-size:12px;opacity:.8">No. ${esc(e.numero)} · ${esc(e.tipo)}</div><div style="font-size:20px;font-weight:700">${esc(e.nombre)}</div>
       <div style="font-size:13px;opacity:.85">${esc([e.puesto, e.empresa, e.sede].filter(Boolean).join(' · '))}</div></div>
@@ -992,10 +992,14 @@ views.reportes = { title: 'Reportes personalizados', async render(el, q) {
 } };
 
 // ---------------- Tablero ----------------
-views.tablero = { title: 'Tablero de hoy', async render(el) {
-  const [d, t] = await Promise.all([api('/dashboard'), api('/tendencia?dias=14')]);
+views.tablero = { title: 'Hoy', async render(el) {
+  const [d, t, h] = await Promise.all([api('/dashboard'), api('/tendencia?dias=14'), api('/asistente/hallazgos')]);
   const r = d.resumen, esperados = r.total - r.descanso;
+  const icon = { warn: '!', ok: '✓', info: 'i' };
   el.innerHTML = `
+    <div class="card ia-card" style="margin-bottom:14px"><div class="card-head"><h2><span class="spark">✦</span> Resumen IA</h2>
+      <button class="linkbtn" id="preg-resumen">Pregúntale al copiloto →</button></div>
+      ${h.hallazgos.map((x) => `<div class="insight ${x.tipo}"><div class="ic">${icon[x.tipo]}</div><div>${esc(x.texto)}${x.emp ? ` <a href="#" class="small" data-emp="${x.emp}">ver ficha</a>` : x.href ? ` <a class="small" href="${x.href}">abrir</a>` : ''}</div></div>`).join('')}</div>
     <div class="grid kpis">
       <div class="card kpi ok"><div class="label">Presentes</div><div class="value">${d.presentes}</div><div class="small muted">de ${esperados} esperados · ${esperados ? Math.round((d.presentes / esperados) * 100) : 0}%</div></div>
       <div class="card kpi warn"><div class="label">Retardos</div><div class="value">${r.retardos}</div></div>
@@ -1031,14 +1035,139 @@ views.tablero = { title: 'Tablero de hoy', async render(el) {
   graficaApilada($('#g-tend', el), t.dias, [{ key: 'a_tiempo', ...ST.a_tiempo }, { key: 'retardo', ...ST.retardo }, { key: 'falta', ...ST.falta }], { etiqueta: (x, largo) => diaCorto(x.fecha, largo), titulo: 'Asistencia de los últimos 14 días' });
   if (t.llegadas.length) graficaBarras($('#g-lleg', el), t.llegadas, { valor: (x) => x.n, etiqueta: (x, largo) => largo ? `${x.desde} a ${x.desde.slice(0, 3)}${String(Number(x.desde.slice(3)) + 14).padStart(2, '0')}` : (t.llegadas.length <= 10 || x.desde.endsWith(':00') ? x.desde : ''), formato: (v) => `${v} personas` });
   else $('#g-lleg', el).innerHTML = '<div class="empty">Sin llegadas registradas</div>';
+  $('#preg-resumen', el).onclick = () => copiloto.preguntar('Dame el resumen de hoy');
   $('#ver-tabla', el).onclick = (e) => { const tt = $('#t-tend', el); tt.classList.toggle('hidden'); e.target.textContent = tt.classList.contains('hidden') ? 'Ver datos' : 'Ocultar datos'; };
+} };
+
+// ---------------- Copiloto (asistente IA) ----------------
+const copiloto = (() => {
+  const LS = 'copiloto_historial';
+  let hist = [];
+  try { hist = JSON.parse(sessionStorage.getItem(LS) || '[]'); } catch { hist = []; }
+  const guardar = () => { try { sessionStorage.setItem(LS, JSON.stringify(hist.slice(-30))); } catch { /* sin almacenamiento */ } };
+  // Markdown mínimo: **negritas**, listas, tablas | a | b | y saltos de línea (todo escapado)
+  const md = (t) => {
+    const lines = String(t || '').split('\n'); let html = '', tabla = [];
+    const inline = (x) => esc(x).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
+    const cerrarTabla = () => {
+      if (!tabla.length) return;
+      const filas = tabla.filter((l) => !/^\s*\|?\s*:?-{2,}/.test(l)).map((l) => l.replace(/^\s*\||\|\s*$/g, '').split('|').map((c) => c.trim()));
+      html += `<div class="tbl"><table><thead><tr>${filas[0].map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${filas.slice(1).map((f) => `<tr>${f.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+      tabla = [];
+    };
+    for (const l of lines) {
+      if (/^\s*\|.*\|\s*$/.test(l)) { tabla.push(l); continue; }
+      cerrarTabla();
+      if (/^\s*[-*] /.test(l)) html += `<div>• ${inline(l.replace(/^\s*[-*] /, ''))}</div>`;
+      else if (/^#{1,4} /.test(l)) html += `<div style="font-weight:700;margin-top:6px">${inline(l.replace(/^#+ /, ''))}</div>`;
+      else if (l.trim()) html += `<div>${inline(l)}</div>`;
+      else html += '<div style="height:6px"></div>';
+    }
+    cerrarTabla();
+    return html;
+  };
+  const pintarMsg = (m) => {
+    if (m.rol === 'user') return `<div class="msg yo">${esc(m.texto)}</div>`;
+    const r = m.r || {};
+    return `<div class="msg ia"><div class="motor ${r.motor === 'claude' ? 'claude' : ''}"><i></i>${r.motor === 'claude' ? 'Claude' : 'Motor local'}</div>
+      ${md(m.texto)}
+      ${r.tabla ? `<div class="tbl"><table><thead><tr>${r.tabla.columnas.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${r.tabla.filas.map((f) => `<tr>${f.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : ''}
+      ${(r.acciones || []).length ? `<div class="acc">${r.acciones.map((a) => a.emp ? `<button class="btn sm" data-emp="${a.emp}">${esc(a.label)}</button>` : `<a class="btn sm" href="${esc(a.href)}">${esc(a.label)}</a>`).join('')}</div>` : ''}
+      ${r.aviso ? `<div class="aviso">⚠ ${esc(r.aviso)}</div>` : ''}</div>
+      ${(r.sugerencias || []).length && m === hist[hist.length - 1] ? `<div class="sug">${r.sugerencias.map((s) => `<button type="button" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div>` : ''}`;
+  };
+  const pintar = (pensando) => {
+    const box = $('#cp-msgs');
+    box.innerHTML = (hist.length ? hist.map(pintarMsg).join('') : `<div class="msg ia"><div class="motor"><i></i>Copiloto</div>
+      <div>Hola${state.me?.nombre ? ', <b>' + esc(state.me.nombre.split(' ')[0]) + '</b>' : ''} 👋 Pregúntame lo que quieras saber de la asistencia: faltas, retardos, horas, una persona en particular o el límite legal de horas.</div></div>
+      <div class="sug">${['¿Quién faltó hoy?', '¿Quién llegó tarde esta semana?', '¿Quién tiene más retardos este mes?', 'Horas extra de la semana pasada', 'Huellas pendientes'].map((s) => `<button type="button" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div>`)
+      + (pensando ? '<div class="msg ia"><div class="typing"><span></span><span></span><span></span></div></div>' : '');
+    box.scrollTop = box.scrollHeight;
+    box.querySelectorAll('[data-q]').forEach((b) => b.onclick = () => preguntar(b.dataset.q));
+  };
+  async function preguntar(q) {
+    q = String(q || '').trim(); if (!q) return;
+    abrir();
+    hist.push({ rol: 'user', texto: q }); pintar(true);
+    try {
+      const r = await api('/asistente', { method: 'POST', body: { pregunta: q, historial: hist.slice(0, -1).map((h) => ({ rol: h.rol, texto: h.texto })) } });
+      hist.push({ rol: 'assistant', texto: r.texto, r });
+      $('#cp-motor').textContent = r.motor === 'claude' ? `Claude${r.modelo ? ' · ' + r.modelo : ''}` : 'Motor local';
+    } catch (e) { hist.push({ rol: 'assistant', texto: 'No pude responder: ' + e.message, r: { motor: 'local' } }); }
+    guardar(); pintar();
+  }
+  function abrir() { $('#copilot').classList.remove('cerrado'); $('#btn-copiloto').classList.add('on'); try { localStorage.setItem('copiloto', '1'); } catch {} }
+  function alternar() { const c = $('#copilot').classList.toggle('cerrado'); $('#btn-copiloto').classList.toggle('on', !c); try { localStorage.setItem('copiloto', c ? '0' : '1'); } catch {} }
+  let iniciado = false;
+  function iniciar() {
+    if (iniciado) { pintar(); return; }
+    iniciado = true;
+    try { if (localStorage.getItem('copiloto') === '0' || innerWidth < 1250) { $('#copilot').classList.add('cerrado'); $('#btn-copiloto').classList.remove('on'); } } catch {}
+    pintar();
+    const ta = $('#cp-q');
+    $('#cp-form').onsubmit = (e) => { e.preventDefault(); const v = ta.value; ta.value = ''; ta.style.height = ''; preguntar(v); };
+    ta.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#cp-form').requestSubmit(); } };
+    ta.oninput = () => { ta.style.height = 'auto'; ta.style.height = Math.min(120, ta.scrollHeight) + 'px'; };
+    $('#cp-limpiar').onclick = () => { hist = []; guardar(); pintar(); };
+    $('#btn-copiloto').onclick = alternar;
+    $('#cmdbar').onclick = () => { abrir(); ta.focus(); };
+    document.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); abrir(); ta.focus(); } });
+    $('#btn-tema').onclick = () => {
+      const actual = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+      document.documentElement.dataset.theme = actual; try { localStorage.setItem('tema', actual); } catch {}
+      if (location.hash.startsWith('#/tablero') || location.hash === '' || location.hash.startsWith('#/reportes')) route();
+    };
+    api('/asistente/hallazgos').then((r) => { $('#cp-motor').textContent = r.ia.activo && r.ia.tiene_api_key ? `Claude · ${r.ia.modelo}` : 'Motor local'; }).catch(() => {});
+  }
+  return { iniciar, preguntar, pintar };
+})();
+
+// ---------------- Configuración de IA ----------------
+views.ia = { title: 'Inteligencia artificial', async render(el) {
+  const c = await api('/ia');
+  el.innerHTML = `<div class="grid two" style="align-items:start">
+    <form class="card" id="f"><h2>✦ Motor del copiloto</h2>
+      <p class="muted" style="margin-top:0">El <b>motor local</b> siempre está disponible: entiende las preguntas más comunes y ningún dato sale de tu servidor.
+      Activa <b>Claude</b> para preguntas libres y más complejas.</p>
+      <label class="f" style="flex-direction:row;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="activo" ${c.activo ? 'checked' : ''}> Usar Claude (Anthropic) cuando haya API key</label>
+      <div class="grid" style="grid-template-columns:1fr 1fr;margin-top:10px">
+        ${field('API key de Anthropic', inp('api_key', '', `type="password" autocomplete="new-password" placeholder="${c.tiene_api_key ? '•••••• guardada (vacío = conservar)' : 'sk-ant-…'}"`), true)}
+        ${field('Modelo', inp('modelo', c.modelo, 'placeholder="claude-opus-5-5"'))}
+        <div class="f">&nbsp;${c.tiene_api_key ? '<label style="color:var(--text)"><input type="checkbox" name="borrar_api_key"> Borrar la API key guardada</label>' : ''}</div>
+      </div>
+      <div class="toolbar" style="margin:14px 0 0"><button class="btn primary">Guardar</button><button type="button" class="btn" id="probar">Probar con una pregunta</button></div>
+      <div id="res" class="small" style="margin-top:10px"></div>
+    </form>
+    <div class="card"><h2>Privacidad y costo</h2><div class="help">
+      <ul style="margin:0;padding-left:18px">
+        <li><b>Motor local:</b> todo se calcula en este servidor. Sin costo.</li>
+        <li><b>Claude:</b> la pregunta y los datos que la responden (nombres, fechas, horas) se envían a Anthropic para generar la respuesta. Según los términos comerciales de Anthropic, los datos enviados por API no se usan para entrenar modelos por defecto; revísalo con tu área legal. Cobra por uso según el modelo.</li>
+        <li>La API key se guarda sólo en este servidor y nunca se muestra en el navegador.</li>
+        <li>Si Claude falla o no hay internet, responde el motor local automáticamente.</li>
+        <li>Los supervisores sólo obtienen datos de su empresa, con cualquiera de los dos motores.</li>
+      </ul>
+      <p class="small" style="margin:10px 0 0">La API key se crea en <b>console.anthropic.com → API Keys</b>.</p></div></div></div>`;
+  const form = $('#f', el);
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(form));
+    await api('/ia', { method: 'PUT', body: { activo: !!d.activo, api_key: d.api_key || undefined, modelo: d.modelo, borrar_api_key: !!d.borrar_api_key } });
+    toast('Configuración guardada'); route();
+  };
+  $('#probar', el).onclick = async () => {
+    $('#res', el).textContent = 'Preguntando…';
+    try {
+      const r = await api('/asistente', { method: 'POST', body: { pregunta: '¿Cuántas personas faltaron hoy?' } });
+      $('#res', el).innerHTML = `<b>${r.motor === 'claude' ? '✅ Respondió Claude' : 'Respondió el motor local'}</b>${r.aviso ? ` · <span style="color:var(--warn)">${esc(r.aviso)}</span>` : ''}<div class="muted">${esc(r.texto.slice(0, 300))}</div>`;
+    } catch (err) { $('#res', el).textContent = err.message; }
+  };
 } };
 
 // ---------------- Router ----------------
 async function route() {
   const [p, query] = (location.hash.slice(2) || 'tablero').split('?');
   let name = views[p] ? p : 'tablero';
-  if (!isAdmin() && ['dispositivos', 'importar', 'catalogos', 'usuarios', 'odoo', 'depurar', 'bitacora'].includes(name)) name = 'tablero';
+  if (!isAdmin() && ['dispositivos', 'importar', 'catalogos', 'usuarios', 'odoo', 'depurar', 'bitacora', 'ia'].includes(name)) name = 'tablero';
   const v = views[name];
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.r === name));
   $('#title').textContent = v.title;
@@ -1054,6 +1183,7 @@ async function start() {
   $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
   $('#who').textContent = `${state.me.nombre || state.me.usuario} · ${isAdmin() ? 'Administrador' : 'Supervisor'}`;
   document.querySelectorAll('#nav .adm').forEach((a) => a.classList.toggle('hidden', !isAdmin()));
+  copiloto.iniciar();
   route();
 }
 $('#login-form').onsubmit = async (e) => {
