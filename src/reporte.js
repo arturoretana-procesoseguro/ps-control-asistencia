@@ -184,4 +184,73 @@ function registroJornada({ desde, hasta, empresa_id, empleado_id }) {
   return { desde, hasta, dias, semanas: resumenSemanas, empresas };
 }
 
-module.exports = { calcularAsistencia, resumen, addDays, jornadaDelDia, limiteSemanal, lunesDe, registroJornada };
+// ---------------- Reportes personalizados ----------------
+const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+const AGRUPAR = {
+  empleado: (f) => [f.empleado_id, `${f.nombre} (${f.numero})`],
+  empresa: (f) => [f.empresa || 'Sin empresa', f.empresa || 'Sin empresa'],
+  sede: (f) => [f.sede || 'Sin sede', f.sede || 'Sin sede'],
+  puesto: (f) => [f.puesto || 'Sin puesto', f.puesto || 'Sin puesto'],
+  tipo: (f) => [f.tipo_empleado, f.tipo_empleado],
+  dia: (f) => [f.fecha, f.fecha],
+  semana: (f) => [lunesDe(f.fecha), 'Semana del ' + lunesDe(f.fecha)],
+  mes: (f) => [f.fecha.slice(0, 7), f.fecha.slice(0, 7)],
+  dia_semana: (f) => { const d = new Date(f.fecha + 'T12:00:00Z').getUTCDay(); return [(d + 6) % 7, DIAS_SEMANA[d]]; },
+};
+const METRICAS = {
+  laborables: 'Días laborables', asistencias: 'Asistencias', faltas: 'Faltas', retardos: 'Retardos', min_retardo: 'Minutos de retardo',
+  horas: 'Horas efectivas', extra: 'Horas extra', pct_asistencia: '% asistencia', pct_puntualidad: '% puntualidad',
+  sin_salida: 'Sin registro de salida', fuera_geocerca: 'Fuera de geocerca', manuales: 'Registros manuales', personas: 'Personas',
+};
+function reportePersonalizado({ desde, hasta, agrupar = 'empleado', empresa_id, sede_id, tipo, estado, empleado_id }) {
+  const key = AGRUPAR[agrupar] || AGRUPAR.empleado;
+  let filas = calcularAsistencia({ desde, hasta, empresa_id, sede_id, tipo, empleado_id });
+  if (estado) filas = filas.filter((f) => f.estado === estado);
+  const grupos = new Map();
+  for (const f of filas) {
+    const [k, etiqueta] = key(f);
+    if (!grupos.has(k)) grupos.set(k, { clave: k, grupo: etiqueta, laborables: 0, asistencias: 0, asist_lab: 0, faltas: 0, retardos: 0, a_tiempo: 0, min_retardo: 0, horas: 0, extra: 0, sin_salida: 0, fuera_geocerca: 0, manuales: 0, _p: new Set() });
+    const g = grupos.get(k);
+    const lab = ['A tiempo', 'Retardo', 'Falta'].includes(f.estado);
+    g._p.add(f.empleado_id);
+    if (lab) g.laborables++;
+    if (f.entrada) { g.asistencias++; if (lab) g.asist_lab++; }
+    if (f.estado === 'Falta') g.faltas++;
+    if (f.estado === 'Retardo') { g.retardos++; g.min_retardo += f.retardo_min; }
+    if (f.estado === 'A tiempo') g.a_tiempo++;
+    g.horas += Number(f.efectivas || 0); g.extra += Number(f.extra || 0);
+    if (f.incidencias.includes('Sin registro de salida')) g.sin_salida++;
+    if (f.fuera_geocerca) g.fuera_geocerca++;
+    g.manuales += f.manuales || 0;
+  }
+  const rows = [...grupos.values()].map((g) => ({
+    clave: g.clave, grupo: g.grupo, laborables: g.laborables, asistencias: g.asistencias, faltas: g.faltas, retardos: g.retardos, min_retardo: g.min_retardo,
+    horas: Number(g.horas.toFixed(2)), extra: Number(g.extra.toFixed(2)),
+    pct_asistencia: g.laborables ? Number(((g.asist_lab / g.laborables) * 100).toFixed(1)) : null,
+    pct_puntualidad: g.asist_lab ? Number(((g.a_tiempo / g.asist_lab) * 100).toFixed(1)) : null,
+    sin_salida: g.sin_salida, fuera_geocerca: g.fuera_geocerca, manuales: g.manuales, personas: g._p.size,
+  }));
+  return { desde, hasta, agrupar, metricas: METRICAS, rows };
+}
+
+/** Tendencia para el tablero: estados por día, horas de llegada y retardos acumulados. */
+function tendencia({ dias = 14, empresa_id }) {
+  const hoy = require('./util').nowLocal().slice(0, 10);
+  const desde = addDays(hoy, -(dias - 1));
+  const filas = calcularAsistencia({ desde, hasta: hoy, empresa_id });
+  const porDia = new Map();
+  for (let d = desde; d <= hoy; d = addDays(d, 1)) porDia.set(d, { fecha: d, a_tiempo: 0, retardo: 0, falta: 0 });
+  const llegadas = new Map(); const ret = new Map();
+  for (const f of filas) {
+    const x = porDia.get(f.fecha);
+    if (f.estado === 'A tiempo') x.a_tiempo++; else if (f.estado === 'Retardo') x.retardo++; else if (f.estado === 'Falta') x.falta++;
+    if (f.entrada) { const m = toMin(f.entrada); const b = Math.floor(m / 15) * 15; llegadas.set(b, (llegadas.get(b) || 0) + 1); }
+    if (f.estado === 'Retardo') { const r = ret.get(f.empleado_id) || { nombre: f.nombre, numero: f.numero, empleado_id: f.empleado_id, retardos: 0, minutos: 0 }; r.retardos++; r.minutos += f.retardo_min; ret.set(f.empleado_id, r); }
+  }
+  const bins = [...llegadas.keys()].sort((a, b) => a - b);
+  const hist = [];
+  if (bins.length) for (let b = Math.max(bins[0], 5 * 60); b <= Math.min(bins[bins.length - 1], 13 * 60); b += 15) hist.push({ desde: `${String(Math.floor(b / 60)).padStart(2, '0')}:${String(b % 60).padStart(2, '0')}`, n: llegadas.get(b) || 0 });
+  return { desde, hasta: hoy, dias: [...porDia.values()], llegadas: hist, top_retardos: [...ret.values()].sort((a, b) => b.retardos - a.retardos || b.minutos - a.minutos).slice(0, 8) };
+}
+
+module.exports = { calcularAsistencia, resumen, addDays, jornadaDelDia, limiteSemanal, lunesDe, registroJornada, reportePersonalizado, tendencia, METRICAS };

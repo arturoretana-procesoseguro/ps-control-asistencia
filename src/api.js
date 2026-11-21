@@ -5,7 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { db, DATA_DIR } = require('./db');
 const U = require('./util');
-const { calcularAsistencia, resumen, registroJornada, lunesDe, addDays: sumarDias } = require('./reporte');
+const { calcularAsistencia, resumen, registroJornada, lunesDe, addDays: sumarDias, reportePersonalizado, tendencia } = require('./reporte');
 const { interpretar } = require('./importar');
 const { nuevoToken } = require('./dispositivos');
 const zkSync = require('./zk-sync');
@@ -302,6 +302,41 @@ api.post('/huellas/:dev/marcar', soloAdmin, wrap((req, res) => {
   U.bitacora(req.user.usuario, 'Estado de huella', 'empleado', req.body?.empleado_id, { dispositivo: req.params.dev, estado: req.body?.estado });
   res.json(r);
 }));
+
+// ---------- Tablero, ficha de empleado y reportes personalizados ----------
+api.get('/tendencia', wrap((req, res) => res.json(tendencia({ dias: Math.min(Number(req.query.dias) || 14, 62), empresa_id: empresaForzada(req, req.query.empresa_id) }))));
+api.get('/empleados/:id/ficha', wrap((req, res) => {
+  const e = db.prepare(`SELECT e.*, em.nombre empresa, s.nombre sede, h.nombre horario FROM empleados e LEFT JOIN empresas em ON em.id=e.empresa_id
+                        LEFT JOIN sedes s ON s.id=e.sede_id LEFT JOIN horarios h ON h.id=e.horario_id WHERE e.id = ?`).get(Number(req.params.id));
+  if (!e) return res.status(404).json({ error: 'Empleado no encontrado' });
+  if (req.user.empresa_id && e.empresa_id !== req.user.empresa_id) return res.status(403).json({ error: 'Sin permiso' });
+  const hoy = U.nowLocal().slice(0, 10);
+  const mes = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : hoy.slice(0, 7);
+  const ultimo = new Date(Date.UTC(Number(mes.slice(0, 4)), Number(mes.slice(5, 7)), 0)).toISOString().slice(0, 10);
+  const dias = calcularAsistencia({ desde: mes + '-01', hasta: ultimo, empleado_id: e.id, todos: true, incluirArchivo: true });
+  const rep = reportePersonalizado({ desde: mes + '-01', hasta: ultimo < hoy ? ultimo : hoy, agrupar: 'empleado', empleado_id: e.id }).rows[0] || null;
+  const ultimas = db.prepare(`SELECT fecha_hora, tipo, origen, dentro_geocerca FROM registros WHERE empleado_numero = ? AND anulado = 0 ORDER BY fecha_hora DESC LIMIT 8`).all(e.numero);
+  const huellas = db.prepare('SELECT h.estado, h.huellas, d.nombre dispositivo FROM huellas h JOIN dispositivos d ON d.id = h.dispositivo_id WHERE h.empleado_id = ?').all(e.id);
+  delete e.pin_hash;
+  res.json({ empleado: e, mes, dias: dias.map((d) => ({ fecha: d.fecha, estado: d.estado, entrada: d.entrada, salida: d.salida, efectivas: d.efectivas, retardo_min: d.retardo_min, incidencias: d.incidencias })), totales: rep, ultimas, huellas });
+}));
+function paramsPers(b, req) {
+  const hoy = U.nowLocal().slice(0, 10);
+  const desde = /^\d{4}-\d{2}-\d{2}$/.test(b.desde || '') ? b.desde : hoy.slice(0, 8) + '01';
+  let hasta = /^\d{4}-\d{2}-\d{2}$/.test(b.hasta || '') ? b.hasta : hoy;
+  if (hasta < desde) hasta = desde;
+  if ((new Date(hasta) - new Date(desde)) / 864e5 > 186) throw new Error('El periodo máximo es de 6 meses');
+  return { desde, hasta, agrupar: b.agrupar, empresa_id: empresaForzada(req, b.empresa_id), sede_id: nn(b.sede_id), tipo: nn(b.tipo), estado: nn(b.estado) };
+}
+api.post('/reportes/personalizado', wrap((req, res) => res.json(reportePersonalizado(paramsPers(req.body || {}, req)))));
+api.get('/reportes/guardados', wrap((req, res) => res.json(db.prepare('SELECT * FROM reportes_guardados ORDER BY nombre').all().map((r) => ({ ...r, config: JSON.parse(r.config) })))));
+api.post('/reportes/guardados', wrap((req, res) => {
+  const { nombre, config } = req.body || {};
+  if (!nombre || !config) return res.status(400).json({ error: 'Falta el nombre' });
+  const r = db.prepare('INSERT INTO reportes_guardados (nombre, config, creado_por) VALUES (?,?,?)').run(String(nombre).slice(0, 80), JSON.stringify(config), req.user.usuario);
+  res.json({ id: Number(r.lastInsertRowid) });
+}));
+api.delete('/reportes/guardados/:id', wrap((req, res) => { db.prepare('DELETE FROM reportes_guardados WHERE id = ?').run(Number(req.params.id)); res.json({ ok: true }); }));
 
 // ---------- Registro de jornada (formato para la autoridad) y bitácora ----------
 function paramsJornada(req) {

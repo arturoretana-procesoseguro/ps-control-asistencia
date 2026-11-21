@@ -125,6 +125,11 @@ db.exec(`CREATE TABLE IF NOT EXISTS odoo_pares (
 db.exec(`INSERT OR IGNORE INTO odoo_pares (empleado_id, fecha, idx, odoo_id, check_in, check_out, error, enviado_en)
          SELECT empleado_id, fecha, 0, odoo_id, check_in, check_out, error, enviado_en FROM odoo_asistencias WHERE odoo_id IS NOT NULL`);
 
+db.exec(`CREATE TABLE IF NOT EXISTS reportes_guardados (
+  id INTEGER PRIMARY KEY, nombre TEXT NOT NULL, config TEXT NOT NULL, creado_por TEXT,
+  creado_en TEXT DEFAULT (datetime('now','localtime'))
+)`);
+
 // ---- cumplimiento (LFT art. 132 fr. XXXIV y art. 804): conservar, anular en vez de borrar, bitácora ----
 addColumn('registros', 'anulado', 'INTEGER DEFAULT 0');
 addColumn('registros', 'anulado_por', 'TEXT');

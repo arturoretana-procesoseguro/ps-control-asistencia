@@ -108,6 +108,11 @@ Deja sólo a los empleados activos. Requiere haber sincronizado con Odoo.
 - Opcional: vaciar la memoria de checadas del equipo (primero se leen sus últimas checadas).
 - Nunca se borran los administradores del checador. Antes de aplicar se guarda un respaldo en `data/respaldos/`. Requiere escribir `DEPURAR` para confirmar.
 
+## Tablero, ficha y reportes (📊)
+- **Tablero**: asistencia de los últimos 14 días (a tiempo, retardo, falta), distribución de horas de llegada, quién acumula más retardos, asistencia por empresa, últimas checadas y estado de checadores.
+- **Ficha del empleado**: al hacer clic en cualquier nombre se abre un panel con su calendario del mes, totales (asistencias, faltas, retardos, horas, puntualidad), estado de huella y últimas checadas.
+- **Reportes personalizados**: periodo, agrupación (empleado, empresa, sede, puesto, tipo, día, semana, mes, día de la semana), métricas a elegir, filtros, gráfica y tabla ordenable, exportación a CSV y plantillas guardadas.
+
 ## Huellas (☝️)
 Estado por empleado y checador (sin alta, sin huella, huella pendiente, registrada), leído de las plantillas del equipo. **Agregar huella** da de alta a la persona en el checador elegido con un **PIN** (para checar mientras registra su huella), actualiza su nombre al de Odoo, guarda el PIN en Odoo y genera comprobantes para imprimir. La sincronización detecta automáticamente cuando la huella quedó registrada.
 

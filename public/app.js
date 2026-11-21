@@ -67,38 +67,6 @@ const confirmar = (msg) => window.confirm(msg);
 // ---------------- Vistas ----------------
 const views = {};
 
-views.tablero = { title: 'Tablero de hoy', async render(el) {
-  const d = await api('/dashboard');
-  const r = d.resumen;
-  el.innerHTML = `
-    <div class="grid kpis">
-      <div class="card kpi ok"><div class="label">Presentes</div><div class="value">${d.presentes}</div><div class="small muted">de ${r.total - r.descanso} esperados</div></div>
-      <div class="card kpi warn"><div class="label">Retardos</div><div class="value">${r.retardos}</div></div>
-      <div class="card kpi bad"><div class="label">Faltas</div><div class="value">${r.faltas}</div><div class="small muted">${r.pendientes} aún en tolerancia</div></div>
-      <div class="card kpi info"><div class="label">Registrados en campo</div><div class="value">${d.en_campo}</div><div class="small muted">${r.fuera_geocerca} fuera de geocerca</div></div>
-    </div>
-    ${d.numeros_sin_empleado ? `<div class="help" style="margin-bottom:14px">⚠️ Hay <b>${d.numeros_sin_empleado}</b> números de empleado con registros de checador que no están dados de alta. <a href="#/registros?sin_empleado=1">Ver registros</a></div>` : ''}
-    <div class="grid two">
-      <div class="card"><h2>Por empresa</h2>
-        ${d.por_empresa.length ? `<div class="table-wrap"><table><thead><tr><th>Empresa</th><th class="num">Esperados</th><th class="num">Presentes</th><th class="num">Retardos</th><th class="num">Faltas</th></tr></thead><tbody>
-        ${d.por_empresa.map((x) => `<tr><td>${esc(x.empresa)}</td><td class="num">${x.total}</td><td class="num">${x.presentes}</td><td class="num">${x.retardos}</td><td class="num">${x.faltas}</td></tr>`).join('')}
-        </tbody></table></div>` : '<div class="empty">Aún no hay empleados dados de alta. <a href="#/empleados">Agregar empleados</a></div>'}
-        <h2 style="margin-top:18px">Últimos registros</h2>
-        ${d.ultimos.length ? d.ultimos.map((u) => `<div class="list-row"><div><b>${esc(u.empleado || 'No. ' + u.empleado_numero)}</b>
-          <div class="small muted">${esc(u.fecha_hora)} ${u.tipo ? '· ' + esc(u.tipo) : ''} ${u.dispositivo ? '· ' + esc(u.dispositivo) : ''}</div></div>
-          <div>${origenBadge(u.origen)} ${geoBadge(u)}</div></div>`).join('') : '<div class="empty">Sin registros todavía</div>'}
-      </div>
-      <div class="card"><h2>Checadores</h2>
-        ${d.dispositivos.length ? d.dispositivos.map((x) => {
-          const mins = x.ultimo_contacto ? (new Date(d.ahora.replace(' ', 'T')) - new Date(x.ultimo_contacto.replace(' ', 'T'))) / 60000 : Infinity;
-          const st = x.estado === 'pendiente' ? ['warn', 'Pendiente de aprobar'] : x.estado === 'inactivo' ? ['', 'Inactivo']
-            : x.marca === 'zkteco' ? (mins < 10 ? ['ok', 'En línea'] : ['bad', 'Sin conexión']) : (x.ultimo_contacto ? ['ok', 'Configurado'] : ['warn', 'Sin eventos aún']);
-          return `<div class="list-row"><div><span class="dot ${st[0]}"></span><b>${esc(x.nombre)}</b><div class="small muted">${x.marca === 'zkteco' ? 'ZKTeco' : 'Hikvision'} · último contacto ${esc(x.ultimo_contacto || 'nunca')}</div></div><span class="badge ${st[0]}">${st[1]}</span></div>`;
-        }).join('') : '<div class="empty">No hay checadores registrados. <a href="#/dispositivos">Configurar</a></div>'}
-      </div>
-    </div>`;
-} };
-
 views.asistencia = { title: 'Reporte de asistencia', async render(el, q) {
   await loadCatalogos();
   const f = { desde: q.desde || addDays(today(), -6), hasta: q.hasta || today(), empresa_id: q.empresa_id || '', sede_id: q.sede_id || '', tipo: q.tipo || '', estado: q.estado || '', empleado_id: q.empleado_id || '' };
@@ -127,7 +95,7 @@ views.asistencia = { title: 'Reporte de asistencia', async render(el, q) {
       <div class="card kpi info"><div class="label">Fuera de geocerca</div><div class="value">${r.fuera_geocerca}</div></div>
     </div>
     ${d.filas.length ? `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>No.</th><th>Empleado</th><th>Empresa</th><th>Horario</th><th>Entrada</th><th>Salida</th><th class="num">Horas</th><th class="num">Retardo</th><th>Estado</th><th>Incidencias</th><th>Origen</th></tr></thead><tbody>
-    ${d.filas.map((x) => `<tr><td>${x.fecha}</td><td class="mono">${esc(x.numero)}</td><td><a href="#/registros?numero=${encodeURIComponent(x.numero)}&desde=${x.fecha}&hasta=${x.fecha}">${esc(x.nombre)}</a></td>
+    ${d.filas.map((x) => `<tr><td>${x.fecha}</td><td class="mono">${esc(x.numero)}</td><td>${empLink(x.empleado_id, x.nombre)}</td>
       <td>${esc(x.empresa || '')}</td><td class="muted">${esc(x.horario)}</td><td>${x.entrada}</td><td>${x.salida}</td><td class="num">${x.horas}</td>
       <td class="num">${x.retardo_min ? x.retardo_min + ' min' : ''}</td><td>${estadoBadge(x.estado)}</td>
       <td class="small">${x.incidencias.map((i) => `<span class="badge ${/geocerca/.test(i) ? 'bad' : 'warn'}">${esc(i)}</span>`).join(' ')}</td><td class="small muted">${esc(x.origen)}</td></tr>`).join('')}
@@ -203,7 +171,7 @@ views.empleados = { title: 'Empleados', async render(el, q) {
     <div class="help" style="margin-bottom:14px">El <b>número de empleado</b> debe ser igual al ID de usuario dado de alta en el checador ZKTeco ("ID de usuario / PIN") o Hikvision ("ID de empleado / Employee No.").
     El personal <b>de campo</b> o <b>mixto</b> necesita un PIN para registrarse desde el celular en <code>${esc(location.origin)}/campo</code>.</div>
     ${list.length ? `<div class="table-wrap"><table><thead><tr><th>No.</th><th>Nombre</th><th>Puesto</th><th>Empresa</th><th>Sede</th><th>Horario</th><th>Tipo</th><th>PIN campo</th><th>Estado</th><th></th></tr></thead><tbody>
-    ${list.map((e) => `<tr><td class="mono">${esc(e.numero)}</td><td><b>${esc(e.nombre)}</b></td><td>${esc(e.puesto || '')}</td><td>${esc(e.empresa || '')}</td>
+    ${list.map((e) => `<tr><td class="mono">${esc(e.numero)}</td><td><b>${empLink(e.id, e.nombre)}</b></td><td>${esc(e.puesto || '')}</td><td>${esc(e.empresa || '')}</td>
       <td>${esc(e.sede || '')}</td><td class="small">${esc(e.horario || '')}</td><td><span class="badge ${e.tipo === 'campo' ? 'ok' : e.tipo === 'mixto' ? 'info' : 'pri'}">${esc(e.tipo)}</span></td>
       <td>${e.tipo === 'oficina' ? '' : e.tiene_pin ? '<span class="badge ok">Asignado</span>' : '<span class="badge warn">Falta PIN</span>'}</td>
       <td>${e.activo ? '<span class="badge ok">Activo</span>' : `<span class="badge">Baja${e.fecha_baja ? ' ' + esc(e.fecha_baja) : ''}</span>${e.archivado ? ' <span class="badge">Archivado</span>' : ''}`}</td>
@@ -701,7 +669,7 @@ views.huellas = { title: 'Registro de huellas', async render(el, q) {
       ${rows.map((f) => { const [t, c, i] = ESTADOS_HUELLA[f.estado] || ESTADOS_HUELLA.sin_revisar; return `<tr class="${st.sel.has(f.id) ? 'sel' : ''}">
         ${isAdmin() ? `<td><input type="checkbox" data-c="${f.id}" ${st.sel.has(f.id) ? 'checked' : ''}></td>` : ''}
         <td class="mono">${esc(f.numero)}</td>
-        <td><b>${esc(f.nombre)}</b><div class="small muted">${esc(f.puesto || '')}${f.en_odoo ? '' : ' <span class="badge warn">No está en Odoo</span>'}</div></td>
+        <td><b>${empLink(f.id, f.nombre)}</b><div class="small muted">${esc(f.puesto || '')}${f.en_odoo ? '' : ' <span class="badge warn">No está en Odoo</span>'}</div></td>
         <td class="small">${esc(f.empresa || '')}</td>
         <td><span class="badge ${c}">${i} ${t}</span>${f.registrado_en && f.estado === 'registrada' ? `<div class="small muted">${esc(f.registrado_en.slice(0, 10))}</div>` : ''}</td>
         <td class="num">${f.huellas ?? '–'}</td>
@@ -787,7 +755,7 @@ views.jornada = { title: 'Registro de jornada', async render(el, q) {
       <div class="card kpi ok"><div class="label">Conformidad del trabajador</div><div class="value">${tot.conf}<span class="small muted"> / ${r.semanas.length}</span></div><div class="small muted">semanas confirmadas</div></div>
     </div>
     ${r.semanas.length ? `<div class="table-wrap"><table><thead><tr><th></th><th>Semana</th><th>No.</th><th>Empleado</th><th>Empresa</th><th class="num">Días</th><th>Horas vs. límite</th><th class="num">Extra</th><th>Conformidad</th></tr></thead><tbody>
-    ${r.semanas.map((w, i) => { const pct = Math.min(100, (w.horas / w.limite) * 100); return `<tr class="expand" data-i="${i}"><td>▸</td><td>${esc(w.semana)}</td><td class="mono">${esc(w.numero)}</td><td><b>${esc(w.nombre)}</b></td><td class="small">${esc(w.empresa || '')}</td>
+    ${r.semanas.map((w, i) => { const pct = Math.min(100, (w.horas / w.limite) * 100); return `<tr class="expand" data-i="${i}"><td>▸</td><td>${esc(w.semana)}</td><td class="mono">${esc(w.numero)}</td><td><b>${empLink(w.empleado_id, w.nombre)}</b></td><td class="small">${esc(w.empresa || '')}</td>
       <td class="num">${w.dias}</td><td><div style="display:flex;gap:8px;align-items:center"><div class="meter ${w.excede ? 'bad' : pct > 90 ? 'warn' : ''}" style="flex:1"><span style="width:${pct}%"></span></div><span class="small">${horasTxt(w.horas)} / ${w.limite} h</span></div></td>
       <td class="num">${w.extra ? horasTxt(w.extra) : ''}</td><td>${w.conformidad ? `<span class="badge ok" title="${esc(w.conformidad)}">✔ Confirmada</span>` : '<span class="badge">Pendiente</span>'}</td></tr>
       <tr class="detalle hidden" data-d="${i}"><td></td><td colspan="8"><table><thead><tr><th>Fecha</th><th>Entradas y salidas</th><th class="num">Descanso</th><th class="num">Efectivas</th><th class="num">Extra</th><th>Medio</th><th>Estado</th><th>Incidencias</th></tr></thead><tbody>
@@ -830,6 +798,236 @@ views.bitacora = { title: 'Bitácora de cambios', async render(el, q) {
     : '<div class="empty card">Sin movimientos en el periodo.</div>';
   $('#prev', el) && ($('#prev', el).onclick = () => { location.hash = '#/bitacora?' + qs({ ...f, offset: Math.max(0, f.offset - 100) }); });
   $('#next', el) && ($('#next', el).onclick = () => { location.hash = '#/bitacora?' + qs({ ...f, offset: f.offset + 100 }); });
+} };
+
+// ---------------- Gráficas (SVG, sin dependencias) ----------------
+const tipEl = (() => { const t = document.createElement('div'); t.className = 'tip hidden'; document.body.appendChild(t); return t; })();
+function mostrarTip(ev, html) { tipEl.innerHTML = html; tipEl.classList.remove('hidden'); const x = Math.min(ev.clientX + 14, innerWidth - tipEl.offsetWidth - 8); tipEl.style.left = x + 'px'; tipEl.style.top = (ev.clientY + 14) + 'px'; }
+function ocultarTip() { tipEl.classList.add('hidden'); }
+const nTicks = (max) => [5, 4, 2].find((n) => Number.isInteger(max / n)) || 4;
+const niceMax = (v) => { if (v <= 5) return 5; const p = 10 ** Math.floor(Math.log10(v)); const n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; };
+/** Barras verticales apiladas. series: [{key, label, color}] (de abajo hacia arriba). */
+function graficaApilada(cont, datos, series, { etiqueta, alto = 220, titulo } = {}) {
+  const W = Math.max(cont.clientWidth || 600, 320), H = alto, m = { t: 8, r: 8, b: 26, l: 30 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const max = niceMax(Math.max(1, ...datos.map((d) => series.reduce((a, s) => a + (d[s.key] || 0), 0))));
+  const bw = Math.min(36, (iw / datos.length) * 0.62), paso = iw / datos.length;
+  const y = (v) => m.t + ih - (v / max) * ih;
+  let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(titulo || '')}">`;
+  for (let i = 0, n = nTicks(max); i <= n; i++) { const v = (max / n) * i; svg += `<line class="grid" x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}"/><text x="${m.l - 6}" y="${y(v) + 4}" text-anchor="end">${Math.round(v)}</text>`; }
+  datos.forEach((d, i) => {
+    const x = m.l + paso * i + (paso - bw) / 2; let acc = 0; const visibles = series.filter((s) => d[s.key] > 0);
+    svg += `<g data-i="${i}">`;
+    visibles.forEach((s, j) => {
+      const h0 = y(acc), h1 = y(acc + d[s.key]); acc += d[s.key];
+      const top = j === visibles.length - 1, gap = j > 0 ? 2 : 0, hh = Math.max(0, h0 - h1 - gap), r = top ? Math.min(4, bw / 2, hh) : 0;
+      svg += top && r ? `<path d="M${x},${h0 - gap} V${h1 + r} Q${x},${h1} ${x + r},${h1} H${x + bw - r} Q${x + bw},${h1} ${x + bw},${h1 + r} V${h0 - gap} Z" fill="${s.color}"/>`
+        : `<rect x="${x}" y="${h1}" width="${bw}" height="${hh}" fill="${s.color}"/>`;
+    });
+    svg += `</g>`;
+    if (datos.length <= 16 || i % Math.ceil(datos.length / 14) === 0) svg += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle">${esc(etiqueta(d))}</text>`;
+    svg += `<rect class="hit" data-h="${i}" x="${m.l + paso * i}" y="${m.t}" width="${paso}" height="${ih}"/>`;
+  });
+  cont.innerHTML = `<div class="legend">${[...series].reverse().map((s) => `<span><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join('')}</div>` + svg + '</svg>';
+  cont.querySelectorAll('[data-h]').forEach((h) => {
+    const d = datos[h.dataset.h];
+    h.onmousemove = (ev) => mostrarTip(ev, `<b>${esc(etiqueta(d, true))}</b>${[...series].reverse().map((s) => `<div class="row"><span><i style="background:${s.color}"></i>${esc(s.label)}</span><b>${d[s.key] || 0}</b></div>`).join('')}`);
+    h.onmouseleave = ocultarTip;
+  });
+}
+/** Barras verticales de una sola serie. */
+function graficaBarras(cont, datos, { valor, etiqueta, alto = 200, color = 'var(--serie-1)', formato = (v) => v, cadaEtiqueta = 1 } = {}) {
+  const W = Math.max(cont.clientWidth || 500, 300), H = alto, m = { t: 8, r: 8, b: 26, l: 30 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b, max = niceMax(Math.max(1, ...datos.map(valor)));
+  const paso = iw / Math.max(1, datos.length), bw = Math.max(3, paso - 2);
+  const y = (v) => m.t + ih - (v / max) * ih;
+  let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}">`;
+  for (let i = 0, n = nTicks(max); i <= n; i++) { const v = (max / n) * i; svg += `<line class="grid" x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}"/><text x="${m.l - 6}" y="${y(v) + 4}" text-anchor="end">${Math.round(v)}</text>`; }
+  datos.forEach((d, i) => {
+    const v = valor(d), x = m.l + paso * i + 1, top = y(v), hh = m.t + ih - top, r = Math.min(4, bw / 2, hh);
+    if (v > 0) svg += `<path d="M${x},${m.t + ih} V${top + r} Q${x},${top} ${x + r},${top} H${x + bw - r} Q${x + bw},${top} ${x + bw},${top + r} V${m.t + ih} Z" fill="${color}"/>`;
+    if (i % cadaEtiqueta === 0) svg += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle">${esc(etiqueta(d))}</text>`;
+    svg += `<rect class="hit" data-h="${i}" x="${m.l + paso * i}" y="${m.t}" width="${paso}" height="${ih}"/>`;
+  });
+  cont.innerHTML = svg + '</svg>';
+  cont.querySelectorAll('[data-h]').forEach((h) => { const d = datos[h.dataset.h]; h.onmousemove = (ev) => mostrarTip(ev, `<b>${esc(etiqueta(d, true))}</b><div class="row"><span>Valor</span><b>${esc(formato(valor(d)))}</b></div>`); h.onmouseleave = ocultarTip; });
+}
+/** Barras horizontales (ranking) de una sola serie, con etiqueta de valor al final. */
+function graficaRanking(cont, datos, { valor, etiqueta, formato = (v) => v, color = 'var(--serie-1)' } = {}) {
+  const W = Math.max(cont.clientWidth || 600, 320), fila = 26, m = { t: 4, r: 56, l: Math.min(220, W * 0.38) };
+  const H = m.t + datos.length * fila + 4, iw = W - m.l - m.r, max = Math.max(1e-9, ...datos.map(valor));
+  let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}">`;
+  datos.forEach((d, i) => {
+    const v = valor(d) || 0, w = Math.max(0, (v / max) * iw), yy = m.t + i * fila, bh = 14, r = Math.min(4, w / 2);
+    const nom = etiqueta(d); const corto = nom.length > 32 ? nom.slice(0, 31) + '…' : nom;
+    svg += `<text x="${m.l - 8}" y="${yy + 15}" text-anchor="end" style="fill:var(--text)">${esc(corto)}</text>`;
+    if (w > 0) svg += `<path d="M${m.l},${yy + 4} H${m.l + w - r} Q${m.l + w},${yy + 4} ${m.l + w},${yy + 4 + r} V${yy + 4 + bh - r} Q${m.l + w},${yy + 4 + bh} ${m.l + w - r},${yy + 4 + bh} H${m.l} Z" fill="${color}"/>`;
+    svg += `<text x="${m.l + w + 6}" y="${yy + 15}">${esc(formato(v))}</text>`;
+    svg += `<rect class="hit" data-h="${i}" x="0" y="${yy}" width="${W}" height="${fila}"/>`;
+  });
+  cont.innerHTML = svg + '</svg>';
+  cont.querySelectorAll('[data-h]').forEach((h) => { const d = datos[h.dataset.h]; h.onmousemove = (ev) => mostrarTip(ev, `<b>${esc(etiqueta(d))}</b><div class="row"><span>Valor</span><b>${esc(formato(valor(d)))}</b></div>`); h.onmouseleave = ocultarTip; });
+}
+const ST = { a_tiempo: { label: 'A tiempo', color: 'var(--st-good)' }, retardo: { label: 'Retardo', color: 'var(--st-warn)' }, falta: { label: 'Falta', color: 'var(--st-crit)' } };
+const diaCorto = (f, largo) => new Date(f + 'T12:00:00').toLocaleDateString('es-MX', largo ? { weekday: 'long', day: 'numeric', month: 'long' } : { day: 'numeric', month: 'short' });
+
+// ---------------- Ficha del empleado (panel lateral) ----------------
+async function abrirFicha(id, mes) {
+  document.querySelectorAll('.drawer, .drawer-bg').forEach((x) => x.remove());
+  const bg = document.createElement('div'); bg.className = 'drawer-bg';
+  const dr = document.createElement('aside'); dr.className = 'drawer';
+  dr.innerHTML = '<div class="dh"><div class="skeleton" style="width:60%;opacity:.4"></div></div><div class="db"><div class="skeleton"></div></div>';
+  const cerrar = () => { bg.remove(); dr.remove(); document.removeEventListener('keydown', esc_); };
+  const esc_ = (e) => { if (e.key === 'Escape') cerrar(); };
+  bg.onclick = cerrar; document.addEventListener('keydown', esc_);
+  document.body.append(bg, dr);
+  let f;
+  try { f = await api(`/empleados/${id}/ficha${mes ? '?mes=' + mes : ''}`); } catch (e) { dr.querySelector('.db').innerHTML = `<div class="help" style="color:var(--bad)">${esc(e.message)}</div>`; return; }
+  const e = f.empleado, t = f.totales || {};
+  const [yy, mm] = f.mes.split('-').map(Number);
+  const prev = new Date(yy, mm - 2, 1), next = new Date(yy, mm, 1);
+  const ym = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const offset = (new Date(f.mes + '-01T12:00:00').getDay() + 6) % 7;
+  const cls = { 'A tiempo': ['ok', '✓'], Retardo: ['warn', 'R'], Falta: ['bad', 'F'], Descanso: ['off', ''], 'Día no laborable': ['', 'X'], Pendiente: ['off', ''] };
+  dr.innerHTML = `<div class="dh"><div style="display:flex;justify-content:space-between;gap:10px"><div>
+      <div style="font-size:12px;opacity:.8">No. ${esc(e.numero)} · ${esc(e.tipo)}</div><div style="font-size:20px;font-weight:700">${esc(e.nombre)}</div>
+      <div style="font-size:13px;opacity:.85">${esc([e.puesto, e.empresa, e.sede].filter(Boolean).join(' · '))}</div></div>
+      <button class="btn sm" id="cerrar" style="background:rgba(255,255,255,.15);color:#fff;border-color:transparent;align-self:start">✕</button></div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${e.activo ? '<span class="badge ok">Activo</span>' : '<span class="badge">Baja</span>'}${e.odoo_id ? '<span class="badge pri">Odoo</span>' : '<span class="badge warn">No está en Odoo</span>'}
+      ${f.huellas.map((h) => `<span class="badge ${h.estado === 'registrada' ? 'ok' : h.estado === 'pendiente' ? 'warn' : 'bad'}">☝️ ${esc(h.dispositivo)}: ${esc((ESTADOS_HUELLA[h.estado] || [h.estado])[0])}</span>`).join('')}
+      ${e.pin_checador ? `<span class="badge">PIN ${esc(e.pin_checador)}</span>` : ''}</div></div>
+    <div class="db">
+      <div class="mini-kpis"><div><b>${t.asistencias ?? 0}</b><span>asistencias</span></div><div><b style="color:var(--bad)">${t.faltas ?? 0}</b><span>faltas</span></div><div><b style="color:var(--warn)">${t.retardos ?? 0}</b><span>retardos (${t.min_retardo ?? 0} min)</span></div>
+        <div><b>${horasTxt(t.horas)}</b><span>horas efectivas</span></div><div><b>${horasTxt(t.extra)}</b><span>horas extra</span></div><div><b>${t.pct_puntualidad ?? '—'}${t.pct_puntualidad != null ? '%' : ''}</b><span>puntualidad</span></div></div>
+      <div class="card"><div class="card-head"><button class="btn sm" data-mes="${ym(prev)}">‹</button><h2>${(() => { const t = new Date(f.mes + '-01T12:00:00').toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }); return t.charAt(0).toUpperCase() + t.slice(1); })()}</h2><button class="btn sm" data-mes="${ym(next)}">›</button></div>
+        <div class="cal">${['L', 'M', 'M', 'J', 'V', 'S', 'D'].map((d) => `<div class="h">${d}</div>`).join('')}${'<div></div>'.repeat(offset)}
+        ${f.dias.map((d) => { const [c, l] = cls[d.estado] || ['', '']; return `<div class="d ${c}" title="${esc(d.fecha)} · ${esc(d.estado)}${d.entrada ? ` · ${d.entrada}–${d.salida || '?'}` : ''}${d.retardo_min ? ` · ${d.retardo_min} min tarde` : ''}">${Number(d.fecha.slice(8))}<b>${l}</b></div>`; }).join('')}</div>
+        <div class="legend" style="margin:10px 0 0"><span><i style="background:var(--st-good)"></i>✓ A tiempo</span><span><i style="background:var(--st-warn)"></i>R Retardo</span><span><i style="background:var(--st-crit)"></i>F Falta</span><span>X Día no laborable trabajado</span></div></div>
+      <div class="card"><h2>Últimas checadas</h2>${f.ultimas.length ? f.ultimas.map((u) => `<div class="list-row"><span class="mono">${esc(u.fecha_hora)}</span><span>${esc(u.tipo || '')} ${origenBadge(u.origen)} ${geoBadge(u)}</span></div>`).join('') : '<div class="empty">Sin checadas</div>'}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="#/jornada?empleado_id=${e.id}">📋 Registro de jornada</a><a class="btn" href="#/registros?numero=${encodeURIComponent(e.numero)}">⏱️ Checadas</a>${isAdmin() ? `<button class="btn" id="editar">✏️ Editar</button>` : ''}</div>
+    </div>`;
+  dr.querySelector('#cerrar').onclick = cerrar;
+  dr.querySelectorAll('[data-mes]').forEach((b) => b.onclick = () => abrirFicha(id, b.dataset.mes));
+  dr.querySelectorAll('a').forEach((a) => a.addEventListener('click', cerrar));
+  dr.querySelector('#editar') && (dr.querySelector('#editar').onclick = () => { cerrar(); editarEmpleado(e); });
+}
+document.addEventListener('click', (ev) => { const a = ev.target.closest('[data-emp]'); if (a) { ev.preventDefault(); abrirFicha(a.dataset.emp); } });
+const empLink = (id, nombre) => `<a class="emp-link" data-emp="${id}" href="#">${esc(nombre)}</a>`;
+
+// ---------------- Reportes personalizados ----------------
+views.reportes = { title: 'Reportes personalizados', async render(el, q) {
+  await loadCatalogos();
+  const hoy = today(), lun = lunesLocal(hoy);
+  const presets = { semana: [lun, hoy], pasada: [addDays(lun, -7), addDays(lun, -1)], mes: [hoy.slice(0, 8) + '01', hoy], mes_pasado: [(() => { const d = new Date(hoy.slice(0, 8) + '01T12:00:00'); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 10); })(), addDays(hoy.slice(0, 8) + '01', -1)] };
+  const AGR = { empleado: 'Empleado', empresa: 'Empresa', sede: 'Sede', puesto: 'Puesto', tipo: 'Tipo de empleado', dia: 'Día', semana: 'Semana', mes: 'Mes', dia_semana: 'Día de la semana' };
+  const MET = { asistencias: 'Asistencias', faltas: 'Faltas', retardos: 'Retardos', min_retardo: 'Minutos de retardo', horas: 'Horas efectivas', extra: 'Horas extra', pct_asistencia: '% asistencia', pct_puntualidad: '% puntualidad', laborables: 'Días laborables', sin_salida: 'Sin salida', fuera_geocerca: 'Fuera de geocerca', manuales: 'Registros manuales', personas: 'Personas' };
+  const cfg = { desde: presets.mes[0], hasta: presets.mes[1], agrupar: 'empleado', metricas: ['asistencias', 'faltas', 'retardos', 'horas', 'pct_puntualidad'], grafica: 'retardos', orden: 'retardos', dir: 'desc', empresa_id: '', sede_id: '', tipo: '' };
+  const guardados = await api('/reportes/guardados');
+  if (q.plantilla) Object.assign(cfg, guardados.find((g) => String(g.id) === q.plantilla)?.config || {});
+  el.innerHTML = `<div class="rep-layout">
+    <form class="card panel" id="cfg">
+      <div><div class="small muted" style="margin-bottom:6px">Periodo</div><div class="chips" style="margin:0">${Object.entries({ semana: 'Esta semana', pasada: 'Semana pasada', mes: 'Este mes', mes_pasado: 'Mes pasado' }).map(([k, t]) => `<button type="button" class="chip" data-p="${k}" style="padding:4px 10px;font-size:12px">${t}</button>`).join('')}</div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${field('Desde', `<input type="date" name="desde" value="${cfg.desde}">`)}${field('Hasta', `<input type="date" name="hasta" value="${cfg.hasta}">`)}</div>
+      ${field('Agrupar por', sel('agrupar', Object.entries(AGR).map(([k, t]) => `<option value="${k}" ${cfg.agrupar === k ? 'selected' : ''}>${t}</option>`).join('')))}
+      <div><div class="small muted" style="margin-bottom:6px">Métricas</div><div class="metric-chips">${Object.entries(MET).map(([k, t]) => `<label><input type="checkbox" name="m" value="${k}" ${cfg.metricas.includes(k) ? 'checked' : ''}>${t}</label>`).join('')}</div></div>
+      ${state.me.empresa_id ? '' : field('Empresa', sel('empresa_id', opts(state.cat.empresas, cfg.empresa_id)))}
+      ${field('Sede', sel('sede_id', opts(state.cat.sedes, cfg.sede_id)))}
+      ${field('Tipo', sel('tipo', `<option value="">Todos</option>${['oficina', 'campo', 'mixto'].map((t) => `<option ${cfg.tipo === t ? 'selected' : ''}>${t}</option>`).join('')}`))}
+      <button class="btn primary" style="justify-content:center">Generar</button>
+      <div style="border-top:1px solid var(--border);padding-top:10px"><div class="small muted" style="margin-bottom:6px">Plantillas guardadas</div>
+        ${guardados.length ? guardados.map((g) => `<div class="list-row" style="padding:4px 0"><a href="#/reportes?plantilla=${g.id}">${esc(g.nombre)}</a><button type="button" class="linkbtn" data-delp="${g.id}" title="Eliminar">✕</button></div>`).join('') : '<div class="small muted">Ninguna todavía</div>'}
+        <button type="button" class="btn sm" id="guardar" style="margin-top:8px">💾 Guardar como plantilla</button></div>
+    </form>
+    <div id="out"><div class="card"><div class="skeleton"></div><div class="skeleton" style="margin-top:10px;width:70%"></div></div></div></div>`;
+  const form = $('#cfg', el);
+  const leer = () => { const d = Object.fromEntries(new FormData(form)); d.metricas = [...form.querySelectorAll('[name=m]:checked')].map((x) => x.value); delete d.m; return { ...cfg, ...d }; };
+  el.querySelectorAll('[data-p]').forEach((b) => b.onclick = () => { const [d, h] = presets[b.dataset.p]; form.desde.value = d; form.hasta.value = h; generar(); });
+  el.querySelectorAll('[data-delp]').forEach((b) => b.onclick = async () => { if (confirmar('¿Eliminar la plantilla?')) { await api('/reportes/guardados/' + b.dataset.delp, { method: 'DELETE' }); route(); } });
+  $('#guardar', el).onclick = () => modal('Guardar plantilla', field('Nombre', inp('nombre', '', 'required placeholder="Ej. Retardos por empresa del mes"'), true),
+    async (d) => { await api('/reportes/guardados', { method: 'POST', body: { nombre: d.nombre, config: leer() } }); toast('Plantilla guardada'); route(); });
+  form.onsubmit = (e) => { e.preventDefault(); generar(); };
+  let datos = null;
+  const fmt = (k, v) => v == null ? '—' : k.startsWith('pct_') ? v + '%' : (k === 'horas' || k === 'extra') ? horasTxt(v) : v;
+  const pintar = () => {
+    const c = leer(); Object.assign(cfg, { orden: cfg.orden, dir: cfg.dir });
+    const mets = c.metricas.length ? c.metricas : ['asistencias'];
+    if (!mets.includes(cfg.grafica)) cfg.grafica = mets[0];
+    const temporal = ['dia', 'semana', 'mes', 'dia_semana'].includes(datos.agrupar);
+    const rows = temporal && cfg.orden === 'grupo' ? ordenarPor(datos.rows, 'clave', cfg.dir) : ordenarPor(datos.rows, cfg.orden === 'grupo' ? 'grupo' : cfg.orden, cfg.dir);
+    const tot = Object.fromEntries(mets.map((k) => [k, k.startsWith('pct_') ? null : datos.rows.reduce((a, r) => a + (r[k] || 0), 0)]));
+    $('#out', el).innerHTML = `
+      <div class="card" style="margin-bottom:14px"><div class="card-head"><h2>${esc(MET[cfg.grafica])} por ${esc(AGR[datos.agrupar].toLowerCase())}</h2>
+        <div style="display:flex;gap:8px;align-items:center">${sel('graf', mets.map((k) => `<option value="${k}" ${cfg.grafica === k ? 'selected' : ''}>${MET[k]}</option>`).join(''), 'id="graf" style="padding:4px 8px"')}
+        <button class="btn sm" id="csv">⬇ Excel (CSV)</button></div></div>
+        <div class="small muted" style="margin-bottom:8px">${esc(datos.desde)} al ${esc(datos.hasta)} · ${datos.rows.length} grupos${!temporal && rows.length > 20 ? ' · se muestran los 20 primeros según el orden de la tabla' : ''}</div>
+        <div id="graf-c"></div></div>
+      <div class="table-wrap"><table><thead><tr><th class="sortable ${cfg.orden === 'grupo' ? cfg.dir : ''}" data-s="grupo">${esc(AGR[datos.agrupar])}</th>
+        ${mets.map((k) => `<th class="num sortable ${cfg.orden === k ? cfg.dir : ''}" data-s="${k}">${MET[k]}</th>`).join('')}</tr></thead><tbody>
+        ${rows.map((r) => `<tr><td>${datos.agrupar === 'empleado' ? empLink(r.clave, r.grupo) : esc(r.grupo)}</td>${mets.map((k) => `<td class="num">${esc(fmt(k, r[k]))}</td>`).join('')}</tr>`).join('')}
+        <tr style="font-weight:700;background:var(--surface-2)"><td>Total</td>${mets.map((k) => `<td class="num">${tot[k] == null ? '' : esc(fmt(k, Number(tot[k].toFixed ? tot[k].toFixed(2) : tot[k])))}</td>`).join('')}</tr>
+      </tbody></table></div>`;
+    const gc = $('#graf-c', el), k = cfg.grafica;
+    if (temporal) graficaBarras(gc, ordenarPor(datos.rows, 'clave', 'asc'), { valor: (r) => r[k] || 0, etiqueta: (r, largo) => datos.agrupar === 'dia' && !largo ? r.grupo.slice(5) : r.grupo, formato: (v) => fmt(k, v), cadaEtiqueta: Math.ceil(datos.rows.length / 12) });
+    else graficaRanking(gc, rows.slice(0, 20), { valor: (r) => r[k] || 0, etiqueta: (r) => r.grupo, formato: (v) => fmt(k, v) });
+    $('#graf', el).onchange = (e) => { cfg.grafica = e.target.value; pintar(); };
+    el.querySelectorAll('#out [data-s]').forEach((h) => h.onclick = () => { cfg.dir = cfg.orden === h.dataset.s && cfg.dir === 'desc' ? 'asc' : 'desc'; cfg.orden = h.dataset.s; pintar(); });
+    $('#csv', el).onclick = () => {
+      const cel = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+      const csv = '﻿' + [[AGR[datos.agrupar], ...mets.map((m) => MET[m])].map(cel).join(','), ...rows.map((r) => [r.grupo, ...mets.map((m) => r[m])].map(cel).join(','))].join('\r\n');
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `reporte_${datos.agrupar}_${datos.desde}_${datos.hasta}.csv`; a.click();
+    };
+  };
+  let agrupado = cfg.agrupar;
+  const generar = async () => {
+    const c = leer();
+    if (c.agrupar !== agrupado) { agrupado = c.agrupar; if (['dia', 'semana', 'mes', 'dia_semana'].includes(c.agrupar)) { cfg.orden = 'grupo'; cfg.dir = 'asc'; } }
+    if (!c.metricas.includes(cfg.orden) && cfg.orden !== 'grupo') { cfg.orden = c.metricas[0] || 'grupo'; }
+    try { datos = await api('/reportes/personalizado', { method: 'POST', body: c }); pintar(); } catch (e) { $('#out', el).innerHTML = `<div class="help" style="color:var(--bad)">${esc(e.message)}</div>`; }
+  };
+  generar();
+} };
+
+// ---------------- Tablero ----------------
+views.tablero = { title: 'Tablero de hoy', async render(el) {
+  const [d, t] = await Promise.all([api('/dashboard'), api('/tendencia?dias=14')]);
+  const r = d.resumen, esperados = r.total - r.descanso;
+  el.innerHTML = `
+    <div class="grid kpis">
+      <div class="card kpi ok"><div class="label">Presentes</div><div class="value">${d.presentes}</div><div class="small muted">de ${esperados} esperados · ${esperados ? Math.round((d.presentes / esperados) * 100) : 0}%</div></div>
+      <div class="card kpi warn"><div class="label">Retardos</div><div class="value">${r.retardos}</div></div>
+      <div class="card kpi bad"><div class="label">Faltas</div><div class="value">${r.faltas}</div><div class="small muted">${r.pendientes} aún en tolerancia</div></div>
+      <div class="card kpi info"><div class="label">En campo</div><div class="value">${d.en_campo}</div><div class="small muted">${r.fuera_geocerca} fuera de geocerca</div></div>
+    </div>
+    ${d.numeros_sin_empleado ? `<div class="help" style="margin-bottom:14px">⚠️ Hay <b>${d.numeros_sin_empleado}</b> números con checadas que no están dados de alta. <a href="#/registros?sin_empleado=1">Ver registros</a></div>` : ''}
+    <div class="grid two" style="align-items:start;margin-bottom:14px">
+      <div class="card"><div class="card-head"><h2>Asistencia de los últimos 14 días</h2><button class="linkbtn" id="ver-tabla">Ver datos</button></div><div id="g-tend"></div>
+        <div id="t-tend" class="hidden" style="margin-top:10px"><div class="table-wrap"><table><thead><tr><th>Día</th><th class="num">A tiempo</th><th class="num">Retardos</th><th class="num">Faltas</th></tr></thead><tbody>
+        ${t.dias.map((x) => `<tr><td>${esc(x.fecha)}</td><td class="num">${x.a_tiempo}</td><td class="num">${x.retardo}</td><td class="num">${x.falta}</td></tr>`).join('')}</tbody></table></div></div></div>
+      <div class="card"><h2>Hora de llegada (14 días)</h2><div class="small muted" style="margin-bottom:6px">Personas por intervalo de 15 minutos</div><div id="g-lleg"></div></div>
+    </div>
+    <div class="grid two" style="align-items:start">
+      <div class="card"><h2>Por empresa (hoy)</h2>
+        ${d.por_empresa.length ? `<div class="table-wrap"><table><thead><tr><th>Empresa</th><th>Asistencia</th><th class="num">Retardos</th><th class="num">Faltas</th></tr></thead><tbody>
+        ${d.por_empresa.map((x) => { const pct = x.total ? (x.presentes / x.total) * 100 : 0; return `<tr><td>${esc(x.empresa)}</td><td><div style="display:flex;gap:8px;align-items:center"><div class="meter" style="flex:1"><span style="width:${pct}%"></span></div><span class="small">${x.presentes}/${x.total}</span></div></td><td class="num">${x.retardos}</td><td class="num">${x.faltas}</td></tr>`; }).join('')}
+        </tbody></table></div>` : '<div class="empty">Aún no hay empleados. <a href="#/empleados">Agregar</a></div>'}
+        <h2 style="margin-top:18px">Más retardos (14 días)</h2>
+        ${t.top_retardos.length ? t.top_retardos.map((x) => `<div class="list-row"><span>${empLink(x.empleado_id, x.nombre)} <span class="muted small">No. ${esc(x.numero)}</span></span><span><b>${x.retardos}</b> <span class="muted small">· ${x.minutos} min</span></span></div>`).join('') : '<div class="empty">Sin retardos 🎉</div>'}
+      </div>
+      <div class="card"><h2>Últimas checadas</h2>
+        ${d.ultimos.length ? d.ultimos.map((u) => `<div class="list-row"><div><b>${u.empleado ? esc(u.empleado) : 'No. ' + esc(u.empleado_numero)}</b>
+          <div class="small muted">${esc(u.fecha_hora)} ${u.tipo ? '· ' + esc(u.tipo) : ''} ${u.dispositivo ? '· ' + esc(u.dispositivo) : ''}</div></div><div>${origenBadge(u.origen)} ${geoBadge(u)}</div></div>`).join('') : '<div class="empty">Sin registros todavía</div>'}
+        <h2 style="margin-top:18px">Checadores</h2>
+        ${d.dispositivos.length ? d.dispositivos.map((x) => {
+          const mins = x.ultimo_contacto ? (new Date(d.ahora.replace(' ', 'T')) - new Date(x.ultimo_contacto.replace(' ', 'T'))) / 60000 : Infinity;
+          const st = x.estado === 'pendiente' ? ['warn', 'Pendiente de aprobar'] : x.estado === 'inactivo' ? ['', 'Inactivo'] : x.marca === 'zkteco' ? (mins < 15 ? ['ok', 'En línea'] : ['bad', 'Sin conexión']) : (x.ultimo_contacto ? ['ok', 'Configurado'] : ['warn', 'Sin eventos aún']);
+          return `<div class="list-row"><div><span class="dot ${st[0]}"></span><b>${esc(x.nombre)}</b><div class="small muted">último contacto ${esc(x.ultimo_contacto || 'nunca')}</div></div><span class="badge ${st[0]}">${st[1]}</span></div>`;
+        }).join('') : '<div class="empty">No hay checadores. <a href="#/dispositivos">Configurar</a></div>'}
+      </div>
+    </div>`;
+  graficaApilada($('#g-tend', el), t.dias, [{ key: 'a_tiempo', ...ST.a_tiempo }, { key: 'retardo', ...ST.retardo }, { key: 'falta', ...ST.falta }], { etiqueta: (x, largo) => diaCorto(x.fecha, largo), titulo: 'Asistencia de los últimos 14 días' });
+  if (t.llegadas.length) graficaBarras($('#g-lleg', el), t.llegadas, { valor: (x) => x.n, etiqueta: (x, largo) => largo ? `${x.desde} a ${x.desde.slice(0, 3)}${String(Number(x.desde.slice(3)) + 14).padStart(2, '0')}` : (t.llegadas.length <= 10 || x.desde.endsWith(':00') ? x.desde : ''), formato: (v) => `${v} personas` });
+  else $('#g-lleg', el).innerHTML = '<div class="empty">Sin llegadas registradas</div>';
+  $('#ver-tabla', el).onclick = (e) => { const tt = $('#t-tend', el); tt.classList.toggle('hidden'); e.target.textContent = tt.classList.contains('hidden') ? 'Ver datos' : 'Ocultar datos'; };
 } };
 
 // ---------------- Router ----------------
