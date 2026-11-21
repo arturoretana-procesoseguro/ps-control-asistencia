@@ -92,6 +92,15 @@ Pantalla **🔗 Odoo** (sólo administradores). Requiere una **API key** de un u
 - Sincronización automática cada `ODOO_SYNC_MIN` minutos (10 por defecto) si está activada, o con *Sincronizar ahora*.
 - Compatible con la API JSON-2 (Odoo 19+) y JSON-RPC (versiones anteriores). La API key se guarda en `data/` y nunca se envía al navegador.
 
+## Depuración (🧹)
+Deja sólo a los empleados activos. Requiere haber sincronizado con Odoo.
+- **Se conservan**: vinculados con Odoo y activos.
+- **Se eliminan** (sistema y checadores ZKTeco con lectura directa, con sus huellas): archivados en Odoo, duplicados con número de más de 9 dígitos, y quienes no están en Odoo y no checan desde hace N días.
+- **A revisar** (no se tocan): no están en Odoo pero checaron en los últimos N días.
+- **Checadas**: se borran las anteriores a la fecha elegida y, desde entonces, el sistema rechaza checadas anteriores a esa fecha (aunque el checador las vuelva a enviar).
+- Opcional: vaciar la memoria de checadas del equipo (primero se leen sus últimas checadas).
+- Nunca se borran los administradores del checador. Antes de aplicar se guarda un respaldo en `data/respaldos/`. Requiere escribir `DEPURAR` para confirmar.
+
 ## Reglas del reporte
 - Entrada = primer registro del día (o primera "entrada" explícita); salida = último registro (o última "salida").
 - Retardo si la entrada es posterior a la hora de entrada + tolerancia (se reportan los minutos desde la hora de entrada).

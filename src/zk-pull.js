@@ -71,6 +71,8 @@ async function leerUsuarios(ip, puerto) {
     return (r?.data || []).map((u) => ({
       numero: String(u.userId ?? u.user_id ?? u.uid ?? '').trim(),
       nombre: String(u.name || '').trim(),
+      uid: Number(u.uid) || null,
+      admin: Number(u.role) > 0,
     })).filter((u) => u.numero);
   }, 30000);
 }
@@ -120,4 +122,27 @@ async function crearUsuarios(ip, puerto, usuarios) {
   }, 60000);
 }
 
-module.exports = { infoEquipo, leerUsuarios, leerChecadas, crearUsuarios, nombreChecador, fechaLocal, explicarError };
+/** Borra usuarios del checador por número (con sus huellas). Nunca borra administradores del equipo. */
+async function borrarUsuarios(ip, puerto, numeros) {
+  const quitar = new Set(numeros.map(String));
+  return conLectura(ip, puerto, async (dev) => {
+    const r = await dev.getUsers();
+    const borrados = [], protegidos = [];
+    for (const u of r?.data || []) {
+      const numero = String(u.userId ?? u.user_id ?? '').trim();
+      if (!quitar.has(numero)) continue;
+      if (Number(u.role) > 0) { protegidos.push(numero); continue; }
+      await dev.deleteUser(Number(u.uid));
+      borrados.push(numero);
+    }
+    if (borrados.length) { try { await dev.executeCmd(1013, ''); } catch { /* opcional */ } }
+    return { borrados, protegidos };
+  }, 60000);
+}
+
+/** Vacía la memoria de checadas del equipo (llamar sólo después de haberlas leído). */
+async function vaciarChecadas(ip, puerto) {
+  return conLectura(ip, puerto, (dev) => dev.clearAttendanceLog(), 30000);
+}
+
+module.exports = { borrarUsuarios, vaciarChecadas, infoEquipo, leerUsuarios, leerChecadas, crearUsuarios, nombreChecador, fechaLocal, explicarError };

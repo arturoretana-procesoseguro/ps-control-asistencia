@@ -107,7 +107,12 @@ const insRegistro = db.prepare(`
   INSERT OR IGNORE INTO registros
     (empleado_numero, fecha_hora, tipo, origen, dispositivo_id, lat, lng, precision_m, distancia_m, dentro_geocerca, foto, nota, creado_por)
   VALUES (@empleado_numero, @fecha_hora, @tipo, @origen, @dispositivo_id, @lat, @lng, @precision_m, @distancia_m, @dentro_geocerca, @foto, @nota, @creado_por)`);
+const getDesde = db.prepare("SELECT valor FROM ajustes WHERE clave = 'asistencia_desde'");
+/** Fecha (YYYY-MM-DD) desde la que se aceptan checadas; las anteriores se descartan al recibirlas. */
+function asistenciaDesde() { return getDesde.get()?.valor || null; }
 function guardarRegistro(r) {
+  const desde = asistenciaDesde();
+  if (desde && String(r.fecha_hora) < desde + ' 00:00:00') return 0;
   const row = {
     empleado_numero: String(r.empleado_numero).trim(), fecha_hora: r.fecha_hora, tipo: r.tipo ?? null,
     origen: r.origen, dispositivo_id: r.dispositivo_id ?? null, lat: r.lat ?? null, lng: r.lng ?? null,
@@ -130,5 +135,5 @@ function toCSV(headers, rows) {
 module.exports = {
   hashPassword, checkPassword, sign, verify, readCookie, setCookie, clearCookie,
   requireAdmin, requireRole, requireEmpleado, nowLocal, normalizeDateTime, distanciaMetros,
-  guardarRegistro, toCSV, TZ,
+  guardarRegistro, asistenciaDesde, toCSV, TZ,
 };

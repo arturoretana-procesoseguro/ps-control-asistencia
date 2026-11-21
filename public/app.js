@@ -546,11 +546,79 @@ views.odoo = { title: 'Integración con Odoo', async render(el) {
   }));
 } };
 
+views.depurar = { title: 'Depuración de empleados y checadas', async render(el) {
+  const info = await api('/depurar/ultima');
+  const mes = today().slice(0, 8) + '01';
+  el.innerHTML = `
+    <form class="card" id="f" style="margin-bottom:14px">
+      <p class="muted" style="margin-top:0">Deja sólo a los empleados activos. <b>Se conservan</b> los vinculados con Odoo; <b>se eliminan</b> los archivados en Odoo, los duplicados y los que no están en Odoo y no han checado recientemente.
+      Los que no están en Odoo pero <b>sí checaron</b> se muestran para revisión y no se tocan.</p>
+      <div class="toolbar" style="margin:0">
+        ${field('Conservar checadas desde', `<input type="date" name="desde" value="${esc(info.asistencia_desde || mes)}">`)}
+        ${field('Inactivo si no checa en (días)', inp('dias', '30', 'type="number" min="1" max="365" style="width:120px"'))}
+        <label class="f">&nbsp;<span><input type="checkbox" name="borrar_en_checador" value="1" checked> Borrar también del checador (con sus huellas)</span></label>
+        <label class="f">&nbsp;<span><input type="checkbox" name="vaciar_memoria" value="1"> Vaciar la memoria de checadas del checador</span></label>
+        <button class="btn primary">Vista previa</button>
+      </div>
+      ${info.asistencia_desde ? `<p class="small muted" style="margin:8px 0 0">Actualmente se aceptan checadas desde el <b>${esc(info.asistencia_desde)}</b>.</p>` : ''}
+      ${info.ultima ? `<p class="small muted" style="margin:4px 0 0">Última depuración: ${esc(info.ultima.fecha)} · ${info.ultima.empleados_eliminados} empleados y ${info.ultima.checadas_borradas} checadas eliminados.</p>` : ''}
+    </form>
+    <div id="out"></div>`;
+  const datos = () => { const d = Object.fromEntries(new FormData($('#f', el))); d.borrar_en_checador = !!d.borrar_en_checador; d.vaciar_memoria = !!d.vaciar_memoria; return d; };
+  const tabla = (rows, cols) => rows.length ? `<div class="table-wrap" style="max-height:420px;overflow:auto"><table><thead><tr>${cols.map((c) => `<th>${c[0]}</th>`).join('')}</tr></thead><tbody>
+    ${rows.map((r) => `<tr>${cols.map((c) => `<td>${esc(c[1](r) ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : '<div class="empty">Ninguno</div>';
+  $('#f', el).onsubmit = async (ev) => {
+    ev.preventDefault();
+    const btn = ev.submitter; btn.disabled = true; btn.textContent = 'Analizando…';
+    try {
+      const d = datos();
+      const p = await api('/depurar/vista-previa', { method: 'POST', body: d });
+      const totBorrarDev = p.checadores.reduce((a, c) => a + (c.borrar?.length || 0), 0);
+      $('#out', el).innerHTML = `
+        <div class="grid kpis">
+          <div class="card kpi ok"><div class="label">Se conservan</div><div class="value">${p.conservar}</div><div class="small muted">vinculados con Odoo</div></div>
+          <div class="card kpi bad"><div class="label">Se eliminan</div><div class="value">${p.eliminar.length}</div><div class="small muted">del sistema</div></div>
+          <div class="card kpi warn"><div class="label">A revisar</div><div class="value">${p.revisar.length}</div><div class="small muted">checan pero no están en Odoo</div></div>
+          <div class="card kpi bad"><div class="label">Usuarios a borrar del checador</div><div class="value">${d.borrar_en_checador ? totBorrarDev : 0}</div></div>
+          <div class="card kpi"><div class="label">Checadas a borrar</div><div class="value">${p.checadas_viejas + p.checadas_de_eliminados}</div><div class="small muted">anteriores al ${esc(p.desde)}</div></div>
+        </div>
+        <div class="grid two" style="align-items:start">
+          <div class="card"><h2>Se eliminan (${p.eliminar.length})</h2>${tabla(p.eliminar, [['No.', (r) => r.numero], ['Nombre', (r) => r.nombre], ['Última checada', (r) => r.ultima || 'nunca'], ['Motivo', (r) => r.motivo]])}</div>
+          <div class="card"><h2>A revisar (${p.revisar.length})</h2><p class="small muted">Siguen checando pero no están vinculados con Odoo. No se borran: vincúlalos en <a href="#/odoo">Odoo</a> o dales de alta allá.</p>
+            ${tabla(p.revisar, [['No.', (r) => r.numero], ['Nombre', (r) => r.nombre], ['Última checada', (r) => r.ultima]])}</div>
+        </div>
+        ${p.checadores.map((c) => `<div class="card" style="margin-top:14px"><h2>Checador ${esc(c.dispositivo)}</h2>
+          ${c.error ? `<div class="help" style="color:var(--bad)">${esc(c.error)}</div>` : c.omitido ? '<p class="muted">No se leerá el checador.</p>' : `
+          <p class="small muted">${c.usuarios} usuarios en el equipo. ${d.borrar_en_checador ? `Se borrarán <b>${c.borrar.length}</b> (con sus huellas).` : 'No se borrará ninguno.'}
+          ${c.protegidos.length ? ` ${c.protegidos.length} administradores del equipo se conservan siempre.` : ''} ${c.revisar.length ? ` ${c.revisar.length} usuarios del equipo que no están en el sistema pero checaron recientemente se conservan.` : ''}
+          ${d.vaciar_memoria ? ' Antes de vaciar la memoria se leerán sus últimas checadas.' : ''}</p>
+          ${d.borrar_en_checador ? tabla(c.borrar, [['No.', (r) => r.numero], ['Nombre en el checador', (r) => r.nombre], ['Última checada', (r) => r.ultima || 'nunca']]) : ''}`}</div>`).join('')}
+        <div class="card" style="margin-top:14px;border-color:var(--bad)">
+          <h2>Aplicar depuración</h2>
+          <p class="small">Se guardará un respaldo de la base de datos antes de aplicar. <b>Lo que se borre del checador (usuarios y huellas) no se puede recuperar.</b></p>
+          <div class="toolbar" style="margin:0">${field('Escribe DEPURAR para confirmar', inp('conf', '', 'id="conf" autocomplete="off"'))}<button class="btn primary" id="go" style="background:var(--bad);border-color:var(--bad)">Aplicar</button></div>
+        </div>`;
+      $('#go', el).onclick = async () => {
+        if ($('#conf', el).value.trim() !== 'DEPURAR') return toast('Escribe DEPURAR para confirmar', true);
+        const b = $('#go', el); b.disabled = true; b.textContent = 'Aplicando…';
+        try {
+          const r = await api('/depurar/aplicar', { method: 'POST', body: { ...d, confirmacion: 'DEPURAR' } });
+          $('#out', el).innerHTML = `<div class="card"><h2>Depuración terminada ✅</h2>
+            <p>${r.empleados_eliminados} empleados y ${r.checadas_borradas} checadas eliminados del sistema.</p>
+            ${r.checadores.map((c) => `<p><b>${esc(c.dispositivo)}:</b> ${c.error ? `<span style="color:var(--bad)">${esc(c.error)}</span>` : `${(c.borrados || []).length} usuarios borrados${(c.protegidos || []).length ? `, ${c.protegidos.length} administradores conservados` : ''}${c.memoria_vaciada ? ', memoria de checadas vaciada' : ''}`}</p>`).join('')}
+            <p class="small muted">Respaldo: <code>${esc(r.respaldo)}</code></p></div>`;
+        } catch (e) { toast(e.message, true); b.disabled = false; b.textContent = 'Aplicar'; }
+      };
+    } catch (e) { $('#out', el).innerHTML = `<div class="help" style="color:var(--bad)">${esc(e.message)}</div>`; }
+    finally { btn.disabled = false; btn.textContent = 'Vista previa'; }
+  };
+} };
+
 // ---------------- Router ----------------
 async function route() {
   const [p, query] = (location.hash.slice(2) || 'tablero').split('?');
   let name = views[p] ? p : 'tablero';
-  if (!isAdmin() && ['dispositivos', 'importar', 'catalogos', 'usuarios', 'odoo'].includes(name)) name = 'tablero';
+  if (!isAdmin() && ['dispositivos', 'importar', 'catalogos', 'usuarios', 'odoo', 'depurar'].includes(name)) name = 'tablero';
   const v = views[name];
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.r === name));
   $('#title').textContent = v.title;

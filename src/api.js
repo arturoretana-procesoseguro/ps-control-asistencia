@@ -10,6 +10,7 @@ const { interpretar } = require('./importar');
 const { nuevoToken } = require('./dispositivos');
 const zkSync = require('./zk-sync');
 const odooSync = require('./odoo-sync');
+const depurar = require('./depurar');
 
 const FOTOS_DIR = path.join(DATA_DIR, 'fotos');
 fs.mkdirSync(FOTOS_DIR, { recursive: true });
@@ -243,6 +244,18 @@ api.post('/odoo/probar', soloAdmin, wrapAsync(async (req, res) => res.json(await
 api.post('/odoo/sincronizar', soloAdmin, wrapAsync(async (req, res) => res.json(await odooSync.sincronizarTodo())));
 api.post('/odoo/vincular', soloAdmin, wrapAsync(async (req, res) => res.json(await odooSync.vincular(req.body.empleado_id, req.body.odoo_id))));
 
+// ---------- Depuración ----------
+api.post('/depurar/vista-previa', soloAdmin, wrapAsync(async (req, res) => res.json(await depurar.vistaPrevia(req.body || {}))));
+api.post('/depurar/aplicar', soloAdmin, wrapAsync(async (req, res) => {
+  if (req.body?.confirmacion !== 'DEPURAR') throw new Error('Falta la confirmación');
+  res.json(await depurar.aplicar(req.body));
+}));
+api.get('/depurar/ultima', soloAdmin, wrap((req, res) => {
+  const v = db.prepare("SELECT valor FROM ajustes WHERE clave IN ('ultima_depuracion','asistencia_desde') ORDER BY clave").all();
+  res.json({ asistencia_desde: db.prepare("SELECT valor FROM ajustes WHERE clave='asistencia_desde'").get()?.valor || null,
+    ultima: JSON.parse(db.prepare("SELECT valor FROM ajustes WHERE clave='ultima_depuracion'").get()?.valor || 'null') });
+}));
+
 // ---------- Usuarios ----------
 api.get('/usuarios', soloAdmin, wrap((req, res) => res.json(db.prepare(
   'SELECT u.id, u.usuario, u.nombre, u.rol, u.empresa_id, e.nombre empresa FROM usuarios u LEFT JOIN empresas e ON e.id=u.empresa_id ORDER BY u.usuario').all())));
@@ -322,6 +335,8 @@ api.post('/registros', wrap((req, res) => {
   const fh = U.normalizeDateTime(b.fecha_hora);
   if (!b.empleado_numero || !fh) return res.status(400).json({ error: 'Empleado y fecha/hora son obligatorios' });
   if (!b.nota || !String(b.nota).trim()) return res.status(400).json({ error: 'Indica el motivo del registro manual' });
+  const desdeMin = U.asistenciaDesde();
+  if (desdeMin && fh < desdeMin + ' 00:00:00') return res.status(400).json({ error: `Sólo se aceptan checadas desde el ${desdeMin} (ver Depuración)` });
   const e = db.prepare('SELECT empresa_id FROM empleados WHERE numero = ?').get(String(b.empleado_numero));
   if (!e) return res.status(400).json({ error: 'El empleado no existe' });
   if (req.user.empresa_id && e.empresa_id !== req.user.empresa_id) return res.status(403).json({ error: 'Sin permiso sobre este empleado' });
