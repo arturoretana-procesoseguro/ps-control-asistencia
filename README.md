@@ -39,6 +39,7 @@ Abrir `http://SERVIDOR:8080/` (administración) y `https://SERVIDOR/campo` (pers
 | `ZK_AUTO_APROBAR` | `0` | `1` = aceptar ZKTeco nuevos sin aprobación manual |
 | `ZK_SYNC_MIN` | `5` | Minutos entre lecturas directas de ZKTeco (0 = desactivar) |
 | `ODOO_SYNC_MIN` | `10` | Minutos entre sincronizaciones con Odoo (0 = desactivar) |
+| `ODOO_RANGO_OFICINA` | `3000-3999` | Números para altas automáticas de oficina |
 | `ODOO_RANGO_CAMPO` | `4000-4999` | Números que se dan de alta como personal de campo (no se envían al checador) |
 | `ZK_TIMEZONE` | `-6` | Zona horaria que se envía a los ZKTeco |
 | `CAMPO_EXIGIR_FOTO` | `0` | `1` = la foto es obligatoria en registros de campo |
@@ -86,6 +87,7 @@ Pantalla **🔗 Odoo** (sólo administradores). Requiere una **API key** de un u
 
 - **Empate**: el *ID de credencial* (Badge ID) del empleado en Odoo = número del empleado en el checador (se ignoran ceros a la izquierda). Nombre, puesto y empresa se toman de Odoo.
 - **Vincular**: para empleados del checador sin empate, se elige su ficha de Odoo y el sistema escribe el número como ID de credencial en Odoo (sugiere coincidencias por nombre).
+- **Alta automática** (opción "Alta automática" en 🔗 Odoo): a los empleados **creados en Odoo después de activarla** que no tengan ID de credencial se les asigna el siguiente número libre (`ODOO_RANGO_OFICINA`, 3000-3999; o `ODOO_RANGO_CAMPO`, 4000-4999 si su puesto es de campo: facilitador, inplant, gestor, inspector, verificador), se escribe en Odoo como ID de credencial y se dan de alta en los checadores con "Recibir altas de Odoo" **con PIN y huella pendiente** (el PIN también se guarda en Odoo). Se excluyen los departamentos configurados (por defecto los de La Enfermería).
 - **Altas**: empleados nuevos en Odoo con ID de credencial se crean aquí y, en los checadores ZKTeco con *Recibir altas de Odoo* activado, se crea el usuario en el equipo (número y nombre sin acentos, máx. 24 caracteres). La persona debe registrar su huella o rostro en el checador. Si el checador tiene sede asignada, sólo recibe empleados de esa sede o sin sede.
 - **Bajas**: empleados archivados en Odoo quedan inactivos aquí (no se borran del checador).
 - **Asistencias** (activado por defecto): cada par entrada/salida del día (incluido el regreso de comida) se crea en *Asistencias* de Odoo, con hora en UTC; el día en curso va con la entrada abierta. Si los pares cambian (correcciones, anulaciones) se actualizan o retiran en Odoo. Los días pasados sin salida no se envían hasta corregirse.

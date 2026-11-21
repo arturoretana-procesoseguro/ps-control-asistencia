@@ -9,9 +9,12 @@ const { db } = require('./db');
 const { nowLocal } = require('./util');
 const { Odoo, localAUtc } = require('./odoo');
 const { calcularAsistencia, addDays } = require('./reporte');
-const { crearUsuarios, explicarError } = require('./zk-pull');
+const { leerUsuarios, explicarError } = require('./zk-pull');
+const huellas = require('./huellas');
 
-const CLAVES = ['odoo_url', 'odoo_db', 'odoo_login', 'odoo_api_key', 'odoo_activo', 'odoo_enviar_asist', 'odoo_asist_desde', 'odoo_horario_id'];
+const CLAVES = ['odoo_url', 'odoo_db', 'odoo_login', 'odoo_api_key', 'odoo_activo', 'odoo_enviar_asist', 'odoo_asist_desde', 'odoo_horario_id', 'odoo_autonumerar', 'odoo_excluir_deptos'];
+const EXCLUIR_DEF = 'Servicio medico, Paramedicos, Enfermería, Rayos X, Laboratorio, Direccion Medica, Farmacia';
+const PUESTOS_CAMPO = /facilitador|inplant|gestor|inspector|verificador|t[eé]cnico de estudios/i;
 const getAjuste = (k) => db.prepare('SELECT valor FROM ajustes WHERE clave = ?').get(k)?.valor ?? null;
 const setAjuste = (k, v) => db.prepare('INSERT INTO ajustes (clave, valor) VALUES (?, ?) ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor').run(k, v == null ? null : String(v));
 
@@ -21,7 +24,7 @@ function getConfig({ conSecreto = false } = {}) {
   if (!conSecreto) delete c.odoo_api_key;
   return {
     ...c, tiene_api_key: tiene,
-    ultima_sync: getAjuste('odoo_ultima_sync'), ultimo_error: getAjuste('odoo_ultimo_error'),
+    ultima_sync: getAjuste('odoo_ultima_sync'), autonumerar_desde: getAjuste('odoo_autonumerar_desde'), excluir_def: EXCLUIR_DEF, ultimo_error: getAjuste('odoo_ultimo_error'),
     resumen: JSON.parse(getAjuste('odoo_resumen') || 'null'),
   };
 }
@@ -33,6 +36,10 @@ function setConfig(b) {
   }
   if (!getAjuste('odoo_asist_desde')) setAjuste('odoo_asist_desde', nowLocal().slice(0, 10));
   if (getAjuste('odoo_enviar_asist') == null) setAjuste('odoo_enviar_asist', '1');
+  if (getAjuste('odoo_excluir_deptos') == null) setAjuste('odoo_excluir_deptos', EXCLUIR_DEF);
+  // La numeración automática sólo aplica a empleados creados en Odoo después de activarla
+  if (getAjuste('odoo_autonumerar') === '1' && !getAjuste('odoo_autonumerar_desde')) setAjuste('odoo_autonumerar_desde', new Date().toISOString().slice(0, 19).replace('T', ' '));
+  if (getAjuste('odoo_autonumerar') !== '1') setAjuste('odoo_autonumerar_desde', null);
 }
 function cliente() {
   const c = getConfig({ conSecreto: true });
@@ -69,6 +76,16 @@ function empresaId(nombre) {
   return Number(db.prepare('INSERT INTO empresas (nombre) VALUES (?)').run(nombre).lastInsertRowid);
 }
 
+function rango(nombre, def) {
+  const m = String(process.env[nombre] ?? def).match(/^(\d+)-(\d+)$/);
+  return m ? [Number(m[1]), Number(m[2])] : null;
+}
+/** Siguiente número libre del rango, considerando empleados del sistema (incluidas bajas) y los ID de credencial de Odoo. */
+function siguienteNumero([ini, fin], usados) {
+  for (let n = ini; n <= fin; n++) if (!usados.has(String(n))) return String(n);
+  throw new Error(`No quedan números libres en el rango ${ini}-${fin}`);
+}
+
 /** Números de empleado reservados para personal de campo (no se envían al checador). Ej. ODOO_RANGO_CAMPO=4000-4999 */
 function esDeCampo(numero) {
   const m = String(process.env.ODOO_RANGO_CAMPO ?? '4000-4999').match(/^(\d+)-(\d+)$/);
@@ -77,12 +94,34 @@ function esDeCampo(numero) {
 }
 
 async function sincronizarEmpleados(o) {
-  const emps = await o.searchRead('hr.employee', [], ['id', 'name', 'barcode', 'job_title', 'company_id', 'active'], { context: { active_test: false } });
+  const emps = await o.searchRead('hr.employee', [], ['id', 'name', 'barcode', 'job_title', 'company_id', 'department_id', 'active', 'create_date'], { context: { active_test: false } });
+  // Numeración automática de empleados nuevos de Odoo (sin ID de credencial)
+  const numerados = [];
+  const desdeAuto = getAjuste('odoo_autonumerar') === '1' ? getAjuste('odoo_autonumerar_desde') : null;
+  if (desdeAuto) {
+    const excluir = String(getAjuste('odoo_excluir_deptos') ?? EXCLUIR_DEF).split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)
+      .map((x) => x.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+    const usados = new Set([...db.prepare('SELECT numero FROM empleados').all().map((r) => clave(r.numero)), ...emps.filter((e) => e.barcode).map((e) => clave(e.barcode))]);
+    for (const e of emps) {
+      if (!e.active || e.barcode || !e.create_date || e.create_date < desdeAuto) continue;
+      const depto = String(m2oNombre(e.department_id) || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (excluir.some((x) => depto.includes(x))) continue;
+      const campo = PUESTOS_CAMPO.test(e.job_title || '');
+      const r = campo ? rango('ODOO_RANGO_CAMPO', '4000-4999') : rango('ODOO_RANGO_OFICINA', '3000-3999');
+      if (!r) continue;
+      try {
+        const numero = siguienteNumero(r, usados);
+        await o.write('hr.employee', e.id, { barcode: numero });
+        e.barcode = numero; usados.add(numero);
+        numerados.push({ numero, nombre: e.name, tipo: campo ? 'campo' : 'oficina' });
+      } catch (err) { console.log(`[Odoo] No se pudo numerar a ${e.name}: ${err.message}`); }
+    }
+  }
   const locales = db.prepare('SELECT * FROM empleados').all();
   const porOdoo = new Map(locales.filter((l) => l.odoo_id).map((l) => [l.odoo_id, l]));
   const porNum = new Map(locales.map((l) => [clave(l.numero), l]));
   const horarioDef = getAjuste('odoo_horario_id');
-  const r = { odoo_total: emps.filter((e) => e.active).length, vinculados: 0, desvinculados: 0, nuevos: [], actualizados: 0, bajas: 0, sin_credencial: [], solo_local: [], conflictos: [] };
+  const r = { numerados, odoo_total: emps.filter((e) => e.active).length, vinculados: 0, desvinculados: 0, nuevos: [], actualizados: 0, bajas: 0, sin_credencial: [], solo_local: [], conflictos: [] };
   const usados = new Set();
 
   for (const e of emps) {
@@ -128,16 +167,25 @@ async function sincronizarEmpleados(o) {
 }
 
 /** Crea en los checadores marcados los empleados (de Odoo) que todavía no existen en el equipo. */
+/**
+ * Da de alta en los checadores marcados ("Recibir altas de Odoo") a los empleados de Odoo que todavía no están en el equipo:
+ * con su número, nombre y PIN, y quedan con huella pendiente (el PIN también se guarda en Odoo).
+ */
 async function enviarAltasAChecadores() {
   const devs = db.prepare("SELECT * FROM dispositivos WHERE marca='zkteco' AND estado='activo' AND enviar_altas=1 AND ip_lectura IS NOT NULL AND ip_lectura <> ''").all();
   const res = [];
   for (const d of devs) {
-    const emps = db.prepare(`SELECT numero, nombre FROM empleados WHERE activo = 1 AND odoo_id IS NOT NULL AND tipo IN ('oficina','mixto')
-                             ${d.sede_id ? 'AND (sede_id = ? OR sede_id IS NULL)' : ''}`).all(...(d.sede_id ? [d.sede_id] : []));
     try {
-      const r = await crearUsuarios(d.ip_lectura, d.puerto || 4370, emps);
-      res.push({ dispositivo: d.nombre, creados: r.creados, omitidos: r.omitidos.filter((x) => x.motivo !== 'ya existe en el checador') });
-      if (r.creados.length) console.log(`[Odoo -> ${d.nombre}] ${r.creados.length} usuarios creados en el checador`);
+      const enEquipo = new Set((await leerUsuarios(d.ip_lectura, d.puerto || 4370)).map((u) => clave(u.numero)));
+      const faltan = db.prepare(`SELECT id, numero, nombre FROM empleados WHERE activo = 1 AND odoo_id IS NOT NULL AND tipo IN ('oficina','mixto')
+                                 ${d.sede_id ? 'AND (sede_id = ? OR sede_id IS NULL)' : ''}`).all(...(d.sede_id ? [d.sede_id] : []))
+        .filter((e) => !enEquipo.has(clave(e.numero)));
+      const omitidos = faltan.filter((e) => !/^[0-9A-Za-z]{1,9}$/.test(e.numero)).map((e) => ({ numero: e.numero, motivo: 'el número debe tener máximo 9 letras o dígitos' }));
+      const validos = faltan.filter((e) => /^[0-9A-Za-z]{1,9}$/.test(e.numero));
+      if (!validos.length) { res.push({ dispositivo: d.nombre, creados: [], omitidos }); continue; }
+      const r = await huellas.agregar(d.id, validos.map((e) => e.id), 'Odoo (automático)', { escribirPinOdoo: escribirPin });
+      res.push({ dispositivo: d.nombre, creados: r.hechos.map((h) => ({ numero: h.numero, nombre: h.nombre, pin: h.pin })), omitidos: [...omitidos, ...r.errores] });
+      if (r.hechos.length) console.log(`[Odoo -> ${d.nombre}] ${r.hechos.length} empleados dados de alta con PIN (huella pendiente)`);
     } catch (e) {
       res.push({ dispositivo: d.nombre, error: explicarError(e) });
     }

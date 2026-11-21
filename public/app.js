@@ -445,6 +445,9 @@ views.odoo = { title: 'Integración con Odoo', async render(el) {
           ${field('Horario para empleados nuevos', sel('odoo_horario_id', opts(state.cat.horarios, c.odoo_horario_id, '— Sin horario —')))}
           ${field('Enviar asistencias desde', `<input type="date" name="odoo_asist_desde" value="${esc(c.odoo_asist_desde || today())}">`)}
           <label class="f full"><span>${chk('odoo_activo', c.odoo_activo)} Sincronizar automáticamente cada 10 minutos</span></label>
+          <label class="f full"><span>${chk('odoo_autonumerar', c.odoo_autonumerar)} <b>Alta automática:</b> a los empleados nuevos de Odoo asignarles número (3000… oficina, 4000… campo según su puesto), darlos de alta en los checadores con "Recibir altas de Odoo" con PIN y huella pendiente</span></label>
+          ${c.autonumerar_desde ? `<div class="small muted full">Activo para empleados creados en Odoo desde ${esc(c.autonumerar_desde)} (UTC).</div>` : ''}
+          ${field('Departamentos que NO se dan de alta automáticamente (separados por coma)', `<textarea name="odoo_excluir_deptos" rows="2">${esc(c.odoo_excluir_deptos ?? c.excluir_def)}</textarea>`, true)}
           <label class="f full"><span>${chk('odoo_enviar_asist', c.odoo_enviar_asist ?? '1')} Enviar a Odoo Asistencias cada entrada y salida (incluye regreso de comida; el día en curso con la entrada abierta)</span></label>
         </div>
         <div class="toolbar" style="margin:14px 0 0">
@@ -466,7 +469,7 @@ views.odoo = { title: 'Integración con Odoo', async render(el) {
     </div>
     <div id="res" style="margin-top:14px"></div>`;
   const form = $('#cfg', el);
-  const datos = () => { const d = Object.fromEntries(new FormData(form)); d.odoo_activo = d.odoo_activo ? '1' : '0'; d.odoo_enviar_asist = d.odoo_enviar_asist ? '1' : '0'; return d; };
+  const datos = () => { const d = Object.fromEntries(new FormData(form)); d.odoo_activo = d.odoo_activo ? '1' : '0'; d.odoo_enviar_asist = d.odoo_enviar_asist ? '1' : '0'; d.odoo_autonumerar = d.odoo_autonumerar ? '1' : '0'; return d; };
   const ocupado = async (b, texto, fn) => { const t = b.textContent; b.disabled = true; b.textContent = texto; try { await fn(); } catch (e) { toast(e.message, true); } finally { b.disabled = false; b.textContent = t; } };
   form.onsubmit = async (e) => { e.preventDefault(); try { await api('/odoo', { method: 'PUT', body: datos() }); toast('Configuración guardada'); route(); } catch (err) { toast(err.message, true); } };
   $('#probar', el).onclick = (e) => ocupado(e.target, 'Probando…', async () => {
@@ -505,9 +508,10 @@ views.odoo = { title: 'Integración con Odoo', async render(el) {
       <div class="card"><h2>En Odoo sin ID de credencial</h2>
         <p class="small muted">Estos empleados no tienen número de checador en Odoo. Captúralo en Odoo o vincúlalos desde la lista de la izquierda.</p>
         ${sinCred.length ? sinCred.map((o) => `<div class="list-row"><span>${esc(o.nombre)}</span></div>`).join('') : '<div class="empty">Ninguno ✅</div>'}
+        ${(E.numerados || []).length ? `<h3 style="margin-top:14px">Número asignado automáticamente</h3>${E.numerados.map((n) => `<div class="list-row"><span class="mono">${esc(n.numero)}</span><span>${esc(n.nombre)} <span class="badge">${esc(n.tipo)}</span></span></div>`).join('')}` : ''}
         ${E.nuevos.length ? `<h3 style="margin-top:14px">Dados de alta desde Odoo</h3>${E.nuevos.map((n) => `<div class="list-row"><span class="mono">${esc(n.numero)}</span><span>${esc(n.nombre)}</span></div>`).join('')}` : ''}
         ${(r.checadores || []).length ? `<h3 style="margin-top:14px">Altas enviadas a checadores</h3>${r.checadores.map((x) => `<div class="list-row"><b>${esc(x.dispositivo)}</b><span>${x.error ? `<span class="badge bad">${esc(x.error)}</span>` : `${x.creados.length} creados${x.omitidos.length ? ` · ${x.omitidos.length} omitidos` : ''}`}</span></div>
-          ${(x.creados || []).map((u) => `<div class="small muted">＋ ${esc(u.numero)} ${esc(u.nombre)} — falta registrar huella/rostro</div>`).join('')}
+          ${(x.creados || []).map((u) => `<div class="small muted">＋ ${esc(u.numero)} ${esc(u.nombre)}${u.pin ? ` · PIN <span class="pin">${esc(u.pin)}</span>` : ''} — huella pendiente</div>`).join('')}
           ${(x.omitidos || []).map((u) => `<div class="small" style="color:var(--warn)">${esc(u.numero)}: ${esc(u.motivo)}</div>`).join('')}`).join('')}` : ''}
         ${A.activo && A.errores.length ? `<h3 style="margin-top:14px">Asistencias no enviadas</h3>${A.errores.map((x) => `<div class="small" style="color:var(--bad)">${esc(x)}</div>`).join('')}` : ''}
       </div>
