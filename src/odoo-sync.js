@@ -32,6 +32,7 @@ function setConfig(b) {
     setAjuste(k, b[k] === '' ? null : b[k]);
   }
   if (!getAjuste('odoo_asist_desde')) setAjuste('odoo_asist_desde', nowLocal().slice(0, 10));
+  if (getAjuste('odoo_enviar_asist') == null) setAjuste('odoo_enviar_asist', '1');
 }
 function cliente() {
   const c = getConfig({ conSecreto: true });
@@ -144,34 +145,65 @@ async function enviarAltasAChecadores() {
   return res;
 }
 
+/**
+ * Envía a Odoo Asistencias (hr.attendance) cada par entrada/salida del día.
+ * - El día en curso puede ir con la entrada abierta (para ver en Odoo quién está trabajando).
+ * - Días pasados con una entrada sin salida no se envían (Odoo no permite dejarla abierta): quedan como incidencia.
+ * - Si los pares cambian (correcciones, anulaciones) se actualizan o se eliminan en Odoo.
+ */
 async function enviarAsistencias(o) {
-  if (getAjuste('odoo_enviar_asist') !== '1') return { activo: false };
+  if (getAjuste('odoo_enviar_asist') === '0') return { activo: false };
   const hoy = nowLocal().slice(0, 10);
   let desde = getAjuste('odoo_asist_desde') || hoy;
   const limite = addDays(hoy, -60);
   if (desde < limite) desde = limite;
-  const filas = calcularAsistencia({ desde, hasta: hoy }).filter((f) => f.entrada && f.salida);
+  const filas = calcularAsistencia({ desde, hasta: hoy }).filter((f) => f.pares.length);
   const emp = new Map(db.prepare('SELECT id, odoo_id FROM empleados WHERE odoo_id IS NOT NULL').all().map((e) => [e.id, e.odoo_id]));
-  const r = { activo: true, desde, enviadas: 0, actualizadas: 0, sin_cambio: 0, errores: [] };
+  const r = { activo: true, desde, enviadas: 0, actualizadas: 0, eliminadas: 0, sin_cambio: 0, sin_salida: 0, errores: [] };
+  const guardar = db.prepare(`INSERT INTO odoo_pares (empleado_id, fecha, idx, odoo_id, check_in, check_out, error, enviado_en) VALUES (?,?,?,?,?,?,NULL,?)
+    ON CONFLICT(empleado_id, fecha, idx) DO UPDATE SET odoo_id=excluded.odoo_id, check_in=excluded.check_in, check_out=excluded.check_out, error=NULL, enviado_en=excluded.enviado_en`);
+  const error = db.prepare(`INSERT INTO odoo_pares (empleado_id, fecha, idx, error) VALUES (?,?,?,?)
+    ON CONFLICT(empleado_id, fecha, idx) DO UPDATE SET error=excluded.error`);
+  const fechasConDatos = new Set();
   for (const f of filas) {
     const odooEmp = emp.get(f.empleado_id);
     if (!odooEmp) continue;
-    const ci = localAUtc(`${f.fecha} ${f.entrada}:00`), co = localAUtc(`${f.fecha} ${f.salida}:00`);
-    const prev = db.prepare('SELECT * FROM odoo_asistencias WHERE empleado_id = ? AND fecha = ?').get(f.empleado_id, f.fecha);
-    if (prev?.odoo_id && prev.check_in === ci && prev.check_out === co) { r.sin_cambio++; continue; }
-    try {
-      let id = prev?.odoo_id;
-      if (id) { await o.write('hr.attendance', id, { check_in: ci, check_out: co }); r.actualizadas++; }
-      else { id = await o.create('hr.attendance', { employee_id: odooEmp, check_in: ci, check_out: co }); r.enviadas++; }
-      db.prepare(`INSERT INTO odoo_asistencias (empleado_id, fecha, odoo_id, check_in, check_out, error, enviado_en) VALUES (?,?,?,?,?,NULL,?)
-                  ON CONFLICT(empleado_id, fecha) DO UPDATE SET odoo_id=excluded.odoo_id, check_in=excluded.check_in, check_out=excluded.check_out, error=NULL, enviado_en=excluded.enviado_en`)
-        .run(f.empleado_id, f.fecha, id, ci, co, nowLocal());
-    } catch (e) {
-      const msg = String(e.message).slice(0, 300);
-      db.prepare(`INSERT INTO odoo_asistencias (empleado_id, fecha, error) VALUES (?,?,?)
-                  ON CONFLICT(empleado_id, fecha) DO UPDATE SET error=excluded.error`).run(f.empleado_id, f.fecha, msg);
-      r.errores.push(`${f.fecha} ${f.nombre}: ${msg}`);
+    fechasConDatos.add(f.empleado_id + '|' + f.fecha);
+    // pares deseados: completos; el último puede ir abierto sólo si es hoy
+    const deseados = [];
+    f.pares.forEach((p, i) => {
+      if (!p[0]) return;
+      if (!p[1]) { if (f.fecha === hoy && i === f.pares.length - 1) deseados.push([p[0], null]); else r.sin_salida++; return; }
+      deseados.push(p);
+    });
+    const previos = db.prepare('SELECT * FROM odoo_pares WHERE empleado_id = ? AND fecha = ? ORDER BY idx').all(f.empleado_id, f.fecha);
+    // primero se quitan los sobrantes (evita traslapes al crear)
+    for (const pr of previos.filter((x) => x.idx >= deseados.length)) {
+      try { if (pr.odoo_id) { await o.unlink('hr.attendance', [pr.odoo_id]); r.eliminadas++; } db.prepare('DELETE FROM odoo_pares WHERE empleado_id=? AND fecha=? AND idx=?').run(f.empleado_id, f.fecha, pr.idx); }
+      catch (e) { r.errores.push(`${f.fecha} ${f.nombre}: ${String(e.message).slice(0, 200)}`); }
     }
+    for (let i = 0; i < deseados.length; i++) {
+      const [ent, sal] = deseados[i];
+      const ci = localAUtc(`${f.fecha} ${ent}:00`), co = sal ? localAUtc(`${f.fecha} ${sal}:00`) : null;
+      const prev = previos.find((x) => x.idx === i);
+      if (prev?.odoo_id && prev.check_in === ci && (prev.check_out || null) === co) { r.sin_cambio++; continue; }
+      try {
+        let id = prev?.odoo_id;
+        if (id) { await o.write('hr.attendance', id, { check_in: ci, check_out: co || false }); r.actualizadas++; }
+        else { id = await o.create('hr.attendance', { employee_id: odooEmp, check_in: ci, ...(co ? { check_out: co } : {}) }); r.enviadas++; }
+        guardar.run(f.empleado_id, f.fecha, i, id, ci, co, nowLocal());
+      } catch (e) {
+        const msg = String(e.message).slice(0, 300);
+        error.run(f.empleado_id, f.fecha, i, msg);
+        r.errores.push(`${f.fecha} ${f.nombre}: ${msg}`);
+      }
+    }
+  }
+  // días que ya no tienen checadas válidas (todas anuladas o archivadas): se retiran de Odoo
+  for (const pr of db.prepare('SELECT * FROM odoo_pares WHERE fecha >= ? AND odoo_id IS NOT NULL').all(desde)) {
+    if (fechasConDatos.has(pr.empleado_id + '|' + pr.fecha)) continue;
+    try { await o.unlink('hr.attendance', [pr.odoo_id]); r.eliminadas++; db.prepare('DELETE FROM odoo_pares WHERE empleado_id=? AND fecha=? AND idx=?').run(pr.empleado_id, pr.fecha, pr.idx); }
+    catch (e) { r.errores.push(`${pr.fecha}: ${String(e.message).slice(0, 200)}`); }
   }
   r.errores = r.errores.slice(0, 30);
   return r;

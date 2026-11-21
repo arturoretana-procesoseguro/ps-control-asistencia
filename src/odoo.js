@@ -85,6 +85,7 @@ class Odoo {
     if (method === 'search_read') { args = [kw.domain || []]; delete kw.domain; }
     else if (method === 'create') { args = [kw.vals_list]; delete kw.vals_list; }
     else if (method === 'write') { args = [ids, kw.vals]; delete kw.vals; }
+    else if (method === 'unlink') { args = [ids]; }
     else if (ids) args = [ids];
     return this._rpc('object', 'execute_kw', [this.db, this.uid, this.apiKey, model, method, args, kw]);
   }
@@ -92,6 +93,7 @@ class Odoo {
   searchRead(model, domain, fields, extra = {}) { return this.call(model, 'search_read', { domain, fields, ...extra }); }
   async create(model, vals) { const r = await this.call(model, 'create', { vals_list: [vals] }); return Array.isArray(r) ? r[0] : r; }
   write(model, id, vals) { return this.call(model, 'write', { ids: [id], vals }); }
+  unlink(model, ids) { return this.call(model, 'unlink', { ids }); }
 
   async version() {
     const r = await this._fetch('/web/webclient/version_info', { jsonrpc: '2.0', method: 'call', params: {} });

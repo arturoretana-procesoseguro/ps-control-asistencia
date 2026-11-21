@@ -88,7 +88,7 @@ Pantalla **🔗 Odoo** (sólo administradores). Requiere una **API key** de un u
 - **Vincular**: para empleados del checador sin empate, se elige su ficha de Odoo y el sistema escribe el número como ID de credencial en Odoo (sugiere coincidencias por nombre).
 - **Altas**: empleados nuevos en Odoo con ID de credencial se crean aquí y, en los checadores ZKTeco con *Recibir altas de Odoo* activado, se crea el usuario en el equipo (número y nombre sin acentos, máx. 24 caracteres). La persona debe registrar su huella o rostro en el checador. Si el checador tiene sede asignada, sólo recibe empleados de esa sede o sin sede.
 - **Bajas**: empleados archivados en Odoo quedan inactivos aquí (no se borran del checador).
-- **Asistencias**: por cada día con entrada y salida se crea/actualiza un registro en *Asistencias* de Odoo (hora convertida a UTC). Los días sin salida no se envían hasta corregirse.
+- **Asistencias** (activado por defecto): cada par entrada/salida del día (incluido el regreso de comida) se crea en *Asistencias* de Odoo, con hora en UTC; el día en curso va con la entrada abierta. Si los pares cambian (correcciones, anulaciones) se actualizan o retiran en Odoo. Los días pasados sin salida no se envían hasta corregirse.
 - Sincronización automática cada `ODOO_SYNC_MIN` minutos (10 por defecto) si está activada, o con *Sincronizar ahora*.
 - Compatible con la API JSON-2 (Odoo 19+) y JSON-RPC (versiones anteriores). La API key se guarda en `data/` y nunca se envía al navegador.
 

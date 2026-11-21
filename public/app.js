@@ -477,7 +477,7 @@ views.odoo = { title: 'Integración con Odoo', async render(el) {
           ${field('Horario para empleados nuevos', sel('odoo_horario_id', opts(state.cat.horarios, c.odoo_horario_id, '— Sin horario —')))}
           ${field('Enviar asistencias desde', `<input type="date" name="odoo_asist_desde" value="${esc(c.odoo_asist_desde || today())}">`)}
           <label class="f full"><span>${chk('odoo_activo', c.odoo_activo)} Sincronizar automáticamente cada 10 minutos</span></label>
-          <label class="f full"><span>${chk('odoo_enviar_asist', c.odoo_enviar_asist)} Enviar entradas y salidas a Odoo Asistencias</span></label>
+          <label class="f full"><span>${chk('odoo_enviar_asist', c.odoo_enviar_asist ?? '1')} Enviar a Odoo Asistencias cada entrada y salida (incluye regreso de comida; el día en curso con la entrada abierta)</span></label>
         </div>
         <div class="toolbar" style="margin:14px 0 0">
           <button class="btn primary">Guardar</button>
@@ -522,7 +522,7 @@ views.odoo = { title: 'Integración con Odoo', async render(el) {
       <div class="card kpi ok"><div class="label">Empatados</div><div class="value">${E.vinculados}</div><div class="small muted">${E.actualizados} actualizados · ${E.bajas} bajas</div></div>
       <div class="card kpi info"><div class="label">Nuevos desde Odoo</div><div class="value">${E.nuevos.length}</div></div>
       <div class="card kpi warn"><div class="label">Sin empatar</div><div class="value">${E.solo_local.length + sinCred.length}</div><div class="small muted">${E.solo_local.length} sólo aquí · ${sinCred.length} sólo en Odoo</div></div>
-      <div class="card kpi"><div class="label">Asistencias a Odoo</div><div class="value">${A.activo ? A.enviadas + A.actualizadas : '—'}</div><div class="small muted">${A.activo ? `${A.errores.length} con error` : 'desactivado'}</div></div>
+      <div class="card kpi"><div class="label">Asistencias a Odoo</div><div class="value">${A.activo ? A.enviadas + A.actualizadas : '—'}</div><div class="small muted">${A.activo ? `${A.actualizadas || 0} actualizadas · ${A.eliminadas || 0} retiradas · ${A.sin_salida || 0} sin salida · ${A.errores.length} con error` : 'desactivado'}</div></div>
     </div>
     ${(E.conflictos || []).length ? `<div class="help" style="margin-bottom:14px;color:var(--bad)">${E.conflictos.map(esc).join('<br>')}</div>` : ''}
     <div class="grid two" style="align-items:start">
