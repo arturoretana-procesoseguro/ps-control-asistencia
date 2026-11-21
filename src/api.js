@@ -11,6 +11,7 @@ const { nuevoToken } = require('./dispositivos');
 const zkSync = require('./zk-sync');
 const odooSync = require('./odoo-sync');
 const depurar = require('./depurar');
+const huellas = require('./huellas');
 
 const FOTOS_DIR = path.join(DATA_DIR, 'fotos');
 fs.mkdirSync(FOTOS_DIR, { recursive: true });
@@ -243,6 +244,13 @@ api.put('/odoo', soloAdmin, wrap((req, res) => { odooSync.setConfig(req.body || 
 api.post('/odoo/probar', soloAdmin, wrapAsync(async (req, res) => res.json(await odooSync.probar())));
 api.post('/odoo/sincronizar', soloAdmin, wrapAsync(async (req, res) => res.json(await odooSync.sincronizarTodo())));
 api.post('/odoo/vincular', soloAdmin, wrapAsync(async (req, res) => res.json(await odooSync.vincular(req.body.empleado_id, req.body.odoo_id))));
+
+// ---------- Huellas ----------
+api.get('/huellas/:dev', wrap((req, res) => res.json(huellas.listar(req.params.dev))));
+api.post('/huellas/:dev/escanear', soloAdmin, wrapAsync(async (req, res) => { const r = await huellas.escanear(req.params.dev); res.json({ ...r, ...huellas.listar(req.params.dev) }); }));
+api.post('/huellas/:dev/agregar', soloAdmin, wrapAsync(async (req, res) =>
+  res.json(await huellas.agregar(req.params.dev, req.body?.empleado_ids, req.user.usuario, { escribirPinOdoo: odooSync.escribirPin }))));
+api.post('/huellas/:dev/marcar', soloAdmin, wrap((req, res) => res.json(huellas.marcar(req.params.dev, req.body?.empleado_id, req.body?.estado, req.user.usuario))));
 
 // ---------- Depuración ----------
 api.post('/depurar/vista-previa', soloAdmin, wrapAsync(async (req, res) => res.json(await depurar.vistaPrevia(req.body || {}))));

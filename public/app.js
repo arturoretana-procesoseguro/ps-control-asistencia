@@ -614,6 +614,136 @@ views.depurar = { title: 'Depuración de empleados y checadas', async render(el)
   };
 } };
 
+// ---------------- Utilidades interactivas ----------------
+function ordenarPor(lista, key, dir) {
+  const f = (v) => (v == null ? '' : typeof v === 'number' ? v : String(v).toLowerCase());
+  return [...lista].sort((a, b) => (f(a[key]) > f(b[key]) ? 1 : f(a[key]) < f(b[key]) ? -1 : 0) * (dir === 'desc' ? -1 : 1));
+}
+function imprimirPins(personas, checador) {
+  $('#print-area').innerHTML = personas.map((p) => `<div class="slip">
+    <div><b>Grupo Proceso Seguro · Alta en checador</b></div>
+    <div style="margin-top:6px">${esc(p.nombre)} — No. de empleado <b>${esc(p.numero)}</b></div>
+    <div>Checador: <b>${esc(checador)}</b></div>
+    <div style="margin:8px 0">PIN: <span class="pinbig">${esc(p.pin)}</span></div>
+    <div style="font-size:12px">Mientras registras tu huella, checa con: <b>tu número de empleado → OK → PIN</b>.
+    Acude con Recursos Humanos para registrar tu huella en el checador. No compartas tu PIN.</div></div>`).join('');
+  setTimeout(() => window.print(), 50);
+}
+
+const ESTADOS_HUELLA = {
+  registrada: ['Registrada', 'ok', '✅'], pendiente: ['Huella pendiente', 'warn', '⏳'], sin_huella: ['Sin huella', 'bad', '✋'],
+  sin_alta: ['No está en el checador', 'bad', '➕'], sin_revisar: ['Sin revisar', '', '❔'],
+};
+
+views.huellas = { title: 'Registro de huellas', async render(el, q) {
+  const devs = (await api('/dispositivos')).filter((d) => d.marca === 'zkteco' && d.ip_lectura);
+  if (!devs.length) { el.innerHTML = '<div class="empty card">Primero agrega un checador ZKTeco con IP de lectura directa en <a href="#/dispositivos">Checadores</a>.</div>'; return; }
+  const devId = Number(q.dev) || devs[0].id;
+  const st = { filtro: q.f || 'todos', buscar: '', soloOdoo: false, sort: 'nombre', dir: 'asc', sel: new Set(), data: null };
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      ${devs.length > 1 ? field('Checador', sel('dev', devs.map((d) => `<option value="${d.id}" ${d.id === devId ? 'selected' : ''}>${esc(d.nombre)}</option>`).join(''), 'id="dev"')) : `<div><div class="muted small">Checador</div><b>${esc(devs[0].nombre)}</b></div>`}
+      <div style="flex:1;min-width:240px"><div class="progress" id="bar"></div><div class="small muted" id="barlbl" style="margin-top:6px"></div></div>
+      ${isAdmin() ? '<button class="btn primary" id="scan">🔄 Revisar checador ahora</button>' : ''}
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="toolbar"><div class="searchbox"><input id="q" placeholder="Buscar por nombre o número…" autocomplete="off"></div>
+      <label class="small"><input type="checkbox" id="soloOdoo"> Sólo empleados de Odoo</label></div>
+    <div id="tabla"><div class="card"><div class="skeleton" style="width:60%"></div><div class="skeleton" style="margin-top:10px"></div><div class="skeleton" style="margin-top:10px;width:80%"></div></div></div>
+    <div id="bar-acc"></div>`;
+  $('#dev', el)?.addEventListener('change', (e) => { location.hash = '#/huellas?dev=' + e.target.value; });
+
+  const visibles = () => {
+    const b = st.buscar.toLowerCase();
+    return ordenarPor(st.data.filas.filter((f) => (st.filtro === 'todos' || f.estado === st.filtro)
+      && (!st.soloOdoo || f.en_odoo) && (!b || (f.nombre + ' ' + f.numero).toLowerCase().includes(b))), st.sort, st.dir);
+  };
+  const pintarResumen = () => {
+    const r = st.data.resumen, total = st.data.filas.length || 1;
+    const col = { registrada: 'var(--ok)', pendiente: 'var(--warn)', sin_huella: 'var(--bad)', sin_alta: '#f97316', sin_revisar: 'var(--border)' };
+    $('#bar', el).innerHTML = Object.keys(col).map((k) => r[k] ? `<span title="${ESTADOS_HUELLA[k][0]}: ${r[k]}" style="width:${(r[k] / total) * 100}%;background:${col[k]}"></span>` : '').join('');
+    const rev = st.data.filas.map((f) => f.revisado_en).filter(Boolean).sort().pop();
+    $('#barlbl', el).innerHTML = `<b>${r.registrada || 0}</b> de ${st.data.filas.length} con huella registrada · ${rev ? 'revisado ' + esc(rev) : 'aún no se revisa el checador'}`;
+    $('#chips', el).innerHTML = [['todos', 'Todos', st.data.filas.length, '']].concat(Object.entries(ESTADOS_HUELLA).map(([k, v]) => [k, v[0], r[k] || 0, v[1]]))
+      .filter(([k, , n]) => k === 'todos' || n).map(([k, t, n, c]) => `<button class="chip ${st.filtro === k ? 'on' : ''}" data-f="${k}">${c ? `<span class="dot ${c}"></span>` : ''}${esc(t)} <b>${n}</b></button>`).join('');
+    el.querySelectorAll('[data-f]').forEach((b) => b.onclick = () => { st.filtro = b.dataset.f; st.sel.clear(); pintarResumen(); pintarTabla(); });
+  };
+  const pintarAcciones = () => {
+    const n = st.sel.size;
+    $('#bar-acc', el).innerHTML = n && isAdmin() ? `<div class="actionbar"><b>${n} seleccionado${n > 1 ? 's' : ''}</b>
+      <span>Agregar huella en</span>${sel('devsel', devs.map((d) => `<option value="${d.id}" ${d.id === devId ? 'selected' : ''}>${esc(d.nombre)}</option>`).join(''), 'id="devsel"')}
+      <button class="btn primary" id="go">☝️ Agregar huella</button>
+      <button class="btn sm" id="pins" style="background:transparent;color:#fff">🖨️ Imprimir PIN</button>
+      <button class="btn sm" id="clr" style="background:transparent;color:#fff;border-color:#334155">Cancelar</button></div>` : '';
+    if (!n) return;
+    $('#clr', el).onclick = () => { st.sel.clear(); pintarTabla(); };
+    $('#pins', el).onclick = () => {
+      const ps = st.data.filas.filter((f) => st.sel.has(f.id) && f.pin_checador).map((f) => ({ ...f, pin: f.pin_checador }));
+      if (!ps.length) return toast('Ninguno de los seleccionados tiene PIN todavía. Usa "Agregar huella".', true);
+      imprimirPins(ps, st.data.dispositivo.nombre);
+    };
+    $('#go', el).onclick = () => agregarHuella([...st.sel], Number($('#devsel', el).value));
+  };
+  const pintarTabla = () => {
+    const rows = visibles();
+    const th = (k, t) => `<th class="sortable ${st.sort === k ? st.dir : ''}" data-s="${k}">${t}</th>`;
+    $('#tabla', el).innerHTML = rows.length ? `<div class="table-wrap"><table><thead><tr>
+      ${isAdmin() ? `<th style="width:34px"><input type="checkbox" id="all" ${rows.every((r) => st.sel.has(r.id)) ? 'checked' : ''}></th>` : ''}
+      ${th('numero', 'No.')}${th('nombre', 'Empleado')}${th('empresa', 'Empresa')}${th('estado', 'Estado')}${th('huellas', 'Huellas')}<th>PIN</th>${th('solicitado_en', 'Solicitado')}<th></th></tr></thead><tbody>
+      ${rows.map((f) => { const [t, c, i] = ESTADOS_HUELLA[f.estado] || ESTADOS_HUELLA.sin_revisar; return `<tr class="${st.sel.has(f.id) ? 'sel' : ''}">
+        ${isAdmin() ? `<td><input type="checkbox" data-c="${f.id}" ${st.sel.has(f.id) ? 'checked' : ''}></td>` : ''}
+        <td class="mono">${esc(f.numero)}</td>
+        <td><b>${esc(f.nombre)}</b><div class="small muted">${esc(f.puesto || '')}${f.en_odoo ? '' : ' <span class="badge warn">No está en Odoo</span>'}</div></td>
+        <td class="small">${esc(f.empresa || '')}</td>
+        <td><span class="badge ${c}">${i} ${t}</span>${f.registrado_en && f.estado === 'registrada' ? `<div class="small muted">${esc(f.registrado_en.slice(0, 10))}</div>` : ''}</td>
+        <td class="num">${f.huellas ?? '–'}</td>
+        <td>${f.pin_checador ? `<span class="pin">${esc(f.pin_checador)}</span>` : ''}</td>
+        <td class="small">${f.solicitado_en ? `${esc(f.solicitado_en.slice(0, 16))}<div class="muted">${esc(f.solicitado_por || '')}</div>` : ''}</td>
+        <td style="white-space:nowrap">${isAdmin() ? (f.estado !== 'registrada'
+          ? `<button class="btn sm primary" data-add="${f.id}" title="Dar de alta en el checador con PIN">☝️ Agregar</button> <button class="btn sm" data-ok="${f.id}" title="Marcar como registrada (por ejemplo, si se registró con rostro)">✓</button>`
+          : `<button class="btn sm" data-pend="${f.id}" title="Volver a huella pendiente">↺</button>`) : ''}</td></tr>`; }).join('')}
+      </tbody></table></div>` : '<div class="empty card">No hay empleados con este filtro.</div>';
+    el.querySelectorAll('[data-s]').forEach((h) => h.onclick = () => { st.dir = st.sort === h.dataset.s && st.dir === 'asc' ? 'desc' : 'asc'; st.sort = h.dataset.s; pintarTabla(); });
+    el.querySelectorAll('[data-c]').forEach((c) => c.onchange = () => { c.checked ? st.sel.add(Number(c.dataset.c)) : st.sel.delete(Number(c.dataset.c)); pintarTabla(); });
+    $('#all', el) && ($('#all', el).onchange = (e) => { rows.forEach((r) => (e.target.checked ? st.sel.add(r.id) : st.sel.delete(r.id))); pintarTabla(); });
+    el.querySelectorAll('[data-add]').forEach((b) => b.onclick = () => agregarHuella([Number(b.dataset.add)], devId));
+    el.querySelectorAll('[data-ok]').forEach((b) => b.onclick = () => marcar(b.dataset.ok, 'registrada'));
+    el.querySelectorAll('[data-pend]').forEach((b) => b.onclick = () => marcar(b.dataset.pend, 'pendiente'));
+    pintarAcciones();
+  };
+  const marcar = async (id, estado) => { await api(`/huellas/${devId}/marcar`, { method: 'POST', body: { empleado_id: Number(id), estado } }); await cargar(); toast('Actualizado'); };
+  const agregarHuella = async (ids, dev) => {
+    const nombreDev = devs.find((d) => d.id === dev)?.nombre;
+    if (!confirmar(`Se dará de alta a ${ids.length} persona(s) en ${nombreDev} con un PIN para checar mientras registran su huella. ¿Continuar?`)) return;
+    toast('Escribiendo en el checador…');
+    try {
+      const r = await api(`/huellas/${dev}/agregar`, { method: 'POST', body: { empleado_ids: ids } });
+      st.sel.clear();
+      const m = modal(`Alta en ${r.dispositivo} ✅`, `<div class="full">
+        <p class="small muted" style="margin-top:0">Entrega a cada persona su PIN. Mientras registra su huella puede checar con su número de empleado y su PIN.</p>
+        <div class="table-wrap"><table><thead><tr><th>No.</th><th>Nombre</th><th>PIN</th><th>Odoo</th></tr></thead><tbody>
+        ${r.hechos.map((h) => `<tr><td class="mono">${esc(h.numero)}</td><td>${esc(h.nombre)}</td><td><span class="pin">${esc(h.pin)}</span></td><td>${h.odoo === 'ok' ? '<span class="badge ok">PIN guardado</span>' : h.odoo ? `<span class="badge warn" title="${esc(h.odoo)}">No se guardó</span>` : '—'}</td></tr>`).join('')}
+        </tbody></table></div>
+        ${r.errores.length ? `<div class="help" style="margin-top:10px;color:var(--bad)">${r.errores.map((e) => `${esc(e.numero)}: ${esc(e.motivo)}`).join('<br>')}</div>` : ''}
+        <button type="button" class="btn primary" id="print" style="margin-top:12px">🖨️ Imprimir comprobantes</button></div>`, null);
+      $('#print', m).onclick = () => imprimirPins(r.hechos, r.dispositivo);
+      await cargar();
+    } catch (e) { toast(e.message, true); }
+  };
+  const cargar = async (escanear) => {
+    st.data = escanear ? await api(`/huellas/${devId}/escanear`, { method: 'POST' }) : await api('/huellas/' + devId);
+    pintarResumen(); pintarTabla();
+  };
+  $('#q', el).oninput = (e) => { st.buscar = e.target.value; pintarTabla(); };
+  $('#soloOdoo', el).onchange = (e) => { st.soloOdoo = e.target.checked; pintarTabla(); };
+  $('#scan', el) && ($('#scan', el).onclick = async (e) => {
+    const b = e.target; b.disabled = true; b.textContent = 'Leyendo checador…';
+    try { await cargar(true); toast('Checador revisado'); } catch (err) { toast(err.message, true); } finally { b.disabled = false; b.textContent = '🔄 Revisar checador ahora'; }
+  });
+  await cargar();
+  if (!st.data.filas.some((f) => f.revisado_en) && isAdmin()) $('#scan', el).click();
+} };
+
 // ---------------- Router ----------------
 async function route() {
   const [p, query] = (location.hash.slice(2) || 'tablero').split('?');

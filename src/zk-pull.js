@@ -122,6 +122,77 @@ async function crearUsuarios(ip, puerto, usuarios) {
   }, 60000);
 }
 
+/** Escribe (crea o reemplaza) un usuario con el formato de 72 bytes del protocolo, conservando privilegio y tarjeta. */
+async function escribirUsuario(dev, { uid, role = 0, password = '', nombre = '', cardno = 0, numero }) {
+  const b = Buffer.alloc(72);
+  b.writeUInt16LE(Number(uid), 0);
+  b.writeUInt8(Number(role) || 0, 2);
+  b.write(String(password || '').slice(0, 8), 3, 8, 'ascii');
+  b.write(nombreChecador(nombre), 11, 24, 'ascii');
+  b.writeUInt32LE(Number(cardno) >>> 0, 35);
+  b.write(String(numero).slice(0, 9), 48, 9, 'ascii');
+  return dev.executeCmd(8, b); // CMD_USER_WRQ
+}
+
+/** Plantillas de huella por uid interno: Map(uid -> cantidad de dedos). null si el equipo no lo permite. */
+async function leerPlantillas(dev) {
+  const t = dev.ztcp;
+  if (!t || dev.connectionType !== 'tcp' || typeof t.readWithBuffer !== 'function') return null;
+  try {
+    await t.freeData();
+    const r = await t.readWithBuffer(Buffer.from([0x01, 0x07, 0x00, 0x02, 0, 0, 0, 0, 0, 0, 0])); // CMD_DB_RRQ, FCT_FINGERTMP
+    await t.freeData();
+    if (!r?.data || !(r.data instanceof Buffer) || r.err) return null;
+    let total = r.data.length >= 4 ? r.data.readInt32LE(0) : 0;
+    let buf = r.data.subarray(4);
+    const conteo = new Map();
+    while (total > 0 && buf.length >= 6) {
+      const size = buf.readUInt16LE(0), uid = buf.readUInt16LE(2), valid = buf.readInt8(5);
+      if (size < 6) break;
+      if (valid !== 0) conteo.set(uid, (conteo.get(uid) || 0) + 1);
+      buf = buf.subarray(size); total -= size;
+    }
+    return conteo;
+  } catch { return null; }
+}
+
+/** Usuarios del checador con su cantidad de huellas: [{numero, nombre, uid, admin, role, cardno, huellas|null}] */
+async function leerUsuariosConHuellas(ip, puerto) {
+  return conLectura(ip, puerto, async (dev) => {
+    const r = await dev.getUsers();
+    const plantillas = await leerPlantillas(dev);
+    return (r?.data || []).map((u) => ({
+      numero: String(u.userId ?? u.user_id ?? '').trim(), nombre: String(u.name || '').trim(),
+      uid: Number(u.uid), role: Number(u.role) || 0, admin: Number(u.role) > 0, cardno: Number(u.cardno) || 0,
+      huellas: plantillas ? (plantillas.get(Number(u.uid)) || 0) : null,
+    })).filter((u) => u.numero);
+  }, 60000);
+}
+
+/**
+ * Da de alta (o actualiza) personas en el checador con PIN para que puedan checar mientras registran su huella.
+ * personas: [{numero, nombre, pin}]. Conserva privilegio y tarjeta de los usuarios existentes.
+ */
+async function altaConPin(ip, puerto, personas) {
+  return conLectura(ip, puerto, async (dev) => {
+    const r = await dev.getUsers();
+    const existentes = new Map((r?.data || []).map((u) => [String(u.userId ?? u.user_id ?? '').trim(), u]));
+    let maxUid = (r?.data || []).reduce((m, u) => Math.max(m, Number(u.uid) || 0), 0);
+    const hechos = [], errores = [];
+    for (const p of personas) {
+      const numero = String(p.numero).trim();
+      if (!/^[0-9A-Za-z]{1,9}$/.test(numero)) { errores.push({ numero, motivo: 'El número debe tener máximo 9 letras o dígitos' }); continue; }
+      const ex = existentes.get(numero);
+      const uid = ex ? Number(ex.uid) : ++maxUid;
+      if (uid > 3000) { errores.push({ numero, motivo: 'El checador no admite más usuarios' }); continue; }
+      await escribirUsuario(dev, { uid, role: ex ? Number(ex.role) || 0 : 0, cardno: ex ? Number(ex.cardno) || 0 : 0, password: p.pin, nombre: p.nombre, numero });
+      hechos.push({ numero, uid, nuevo: !ex });
+    }
+    if (hechos.length) { try { await dev.executeCmd(1013, ''); } catch { /* opcional */ } }
+    return { hechos, errores };
+  }, 60000);
+}
+
 /** Borra usuarios del checador por número (con sus huellas). Nunca borra administradores del equipo. */
 async function borrarUsuarios(ip, puerto, numeros) {
   const quitar = new Set(numeros.map(String));
@@ -145,4 +216,4 @@ async function vaciarChecadas(ip, puerto) {
   return conLectura(ip, puerto, (dev) => dev.clearAttendanceLog(), 30000);
 }
 
-module.exports = { borrarUsuarios, vaciarChecadas, infoEquipo, leerUsuarios, leerChecadas, crearUsuarios, nombreChecador, fechaLocal, explicarError };
+module.exports = { leerUsuariosConHuellas, altaConPin, borrarUsuarios, vaciarChecadas, infoEquipo, leerUsuarios, leerChecadas, crearUsuarios, nombreChecador, fechaLocal, explicarError };

@@ -220,4 +220,11 @@ function iniciarProgramador() {
   console.log(`  Sincronización con Odoo: cada ${min} min (si está activada)`);
 }
 
-module.exports = { getConfig, setConfig, probar, sincronizarTodo, vincular, iniciarProgramador };
+/** Guarda el PIN del empleado en Odoo (campo "PIN" de la ficha), si hay conexión configurada. */
+async function escribirPin(odooId, pin) {
+  if (!getAjuste('odoo_api_key')) return null;
+  await cliente().write('hr.employee', Number(odooId), { pin: String(pin) });
+  return true;
+}
+
+module.exports = { escribirPin, getConfig, setConfig, probar, sincronizarTodo, vincular, iniciarProgramador };

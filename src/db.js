@@ -96,6 +96,15 @@ addColumn('dispositivos', 'ultima_sincronizacion', 'TEXT');
 addColumn('dispositivos', 'ultimo_error', 'TEXT');
 addColumn('dispositivos', 'enviar_altas', 'INTEGER DEFAULT 0'); // recibir altas de empleados de Odoo
 addColumn('empleados', 'odoo_id', 'INTEGER');
+addColumn('empleados', 'pin_checador', 'TEXT');      // PIN para checar en el equipo mientras registra huella
+db.exec(`CREATE TABLE IF NOT EXISTS huellas (
+  empleado_id INTEGER NOT NULL REFERENCES empleados(id) ON DELETE CASCADE,
+  dispositivo_id INTEGER NOT NULL REFERENCES dispositivos(id) ON DELETE CASCADE,
+  estado TEXT NOT NULL CHECK (estado IN ('sin_alta','sin_huella','pendiente','registrada')),
+  huellas INTEGER,
+  solicitado_por TEXT, solicitado_en TEXT, registrado_en TEXT, revisado_en TEXT,
+  PRIMARY KEY (empleado_id, dispositivo_id)
+)`);
 db.exec(`CREATE TABLE IF NOT EXISTS odoo_asistencias (
   empleado_id INTEGER NOT NULL REFERENCES empleados(id),
   fecha TEXT NOT NULL,

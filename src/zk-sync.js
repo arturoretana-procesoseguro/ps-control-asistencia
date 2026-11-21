@@ -22,7 +22,10 @@ async function sincronizar(dev) {
     db.prepare('UPDATE dispositivos SET ultima_sincronizacion = ?, ultimo_contacto = ?, ultimo_error = NULL, ip = ? WHERE id = ?')
       .run(ahora, ahora, dev.ip_lectura, dev.id);
     if (nuevas) console.log(`[ZKTeco ${dev.nombre}] sincronizado: ${nuevas} checadas nuevas de ${checadas.length}`);
-    return { leidas: checadas.length, nuevas };
+    let huellas = null;
+    try { huellas = await require('./huellas').revisarPendientes(dev.id); } catch (e) { console.log(`[ZKTeco ${dev.nombre}] revisión de huellas: ${e.message}`); }
+    if (huellas?.registradas) console.log(`[ZKTeco ${dev.nombre}] ${huellas.registradas} huellas registradas`);
+    return { leidas: checadas.length, nuevas, huellas };
   } catch (e) {
     db.prepare('UPDATE dispositivos SET ultimo_error = ? WHERE id = ?').run(`${nowLocal()} · ${errMsg(e)}`, dev.id);
     throw new Error('No se pudo leer el checador: ' + errMsg(e));
