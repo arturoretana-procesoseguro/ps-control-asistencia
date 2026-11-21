@@ -39,6 +39,7 @@ Abrir `http://SERVIDOR:8080/` (administración) y `https://SERVIDOR/campo` (pers
 | `ZK_AUTO_APROBAR` | `0` | `1` = aceptar ZKTeco nuevos sin aprobación manual |
 | `ZK_SYNC_MIN` | `5` | Minutos entre lecturas directas de ZKTeco (0 = desactivar) |
 | `ODOO_SYNC_MIN` | `10` | Minutos entre sincronizaciones con Odoo (0 = desactivar) |
+| `ODOO_RANGO_CAMPO` | `4000-4999` | Números que se dan de alta como personal de campo (no se envían al checador) |
 | `ZK_TIMEZONE` | `-6` | Zona horaria que se envía a los ZKTeco |
 | `CAMPO_EXIGIR_FOTO` | `0` | `1` = la foto es obligatoria en registros de campo |
 

@@ -68,6 +68,13 @@ function empresaId(nombre) {
   return Number(db.prepare('INSERT INTO empresas (nombre) VALUES (?)').run(nombre).lastInsertRowid);
 }
 
+/** Números de empleado reservados para personal de campo (no se envían al checador). Ej. ODOO_RANGO_CAMPO=4000-4999 */
+function esDeCampo(numero) {
+  const m = String(process.env.ODOO_RANGO_CAMPO ?? '4000-4999').match(/^(\d+)-(\d+)$/);
+  const n = Number(numero);
+  return !!m && /^\d+$/.test(numero) && n >= Number(m[1]) && n <= Number(m[2]);
+}
+
 async function sincronizarEmpleados(o) {
   const emps = await o.searchRead('hr.employee', [], ['id', 'name', 'barcode', 'job_title', 'company_id', 'active'], { context: { active_test: false } });
   const locales = db.prepare('SELECT * FROM empleados').all();
@@ -101,9 +108,10 @@ async function sincronizarEmpleados(o) {
       r.vinculados++;
     } else if (e.active) {
       const numero = String(e.barcode).trim();
+      const tipo = esDeCampo(numero) ? 'campo' : 'oficina';
       const id = Number(db.prepare(`INSERT INTO empleados (numero, nombre, puesto, empresa_id, horario_id, tipo, activo, odoo_id)
-                                    VALUES (?, ?, ?, ?, ?, 'oficina', 1, ?)`)
-        .run(numero, e.name, e.job_title || null, empresaId(m2oNombre(e.company_id)), horarioDef ? Number(horarioDef) : null, e.id).lastInsertRowid);
+                                    VALUES (?, ?, ?, ?, ?, ?, 1, ?)`)
+        .run(numero, e.name, e.job_title || null, empresaId(m2oNombre(e.company_id)), horarioDef ? Number(horarioDef) : null, tipo, e.id).lastInsertRowid);
       usados.add(id);
       r.nuevos.push({ numero, nombre: e.name, ...(numero.length > 9 ? { aviso: 'ID de credencial de más de 9 caracteres: no cabe en el checador' } : {}) });
       r.vinculados++;
