@@ -92,14 +92,24 @@ Pantalla **🔗 Odoo** (sólo administradores). Requiere una **API key** de un u
 - Sincronización automática cada `ODOO_SYNC_MIN` minutos (10 por defecto) si está activada, o con *Sincronizar ahora*.
 - Compatible con la API JSON-2 (Odoo 19+) y JSON-RPC (versiones anteriores). La API key se guarda en `data/` y nunca se envía al navegador.
 
+## Cumplimiento: registro electrónico de la jornada (LFT art. 132 fr. XXXIV)
+- **Nada se borra**: las checadas incorrectas se **anulan** con motivo; las checadas viejas y las bajas pasan al **archivo histórico** (fuera de la operación diaria, disponibles para la autoridad).
+- **Bitácora** inalterable (protegida por triggers) de capturas, anulaciones, cambios de empleados, altas en checadores, depuraciones, configuración y conformidades.
+- **📋 Registro de jornada**: por día inicio, fin, pares entrada/salida, descanso, horas efectivas, horas extra, medio de registro (biométrico, móvil con GPS, captura manual) e incidencias; por semana horas contra la jornada máxima (48 h en 2026, 46 en 2027, 44 en 2028, 42 en 2029, 40 desde 2030; configurable con el ajuste `jornada_max_semanal`). Exporta CSV e imprime un formato por trabajador con datos del patrón (razón social, RFC, registro patronal) y del trabajador (CURP, RFC, NSS).
+- **Conformidad del trabajador**: en `/campo` cada persona (campo con su PIN; oficina con el PIN del checador) revisa su semana cerrada y la confirma; se guarda fecha, IP y un hash del detalle confirmado.
+- Las disposiciones generales de la STPS (exigibles desde el 1 de enero de 2027) podrían precisar requisitos adicionales: revisar con el área legal cuando se publiquen.
+
 ## Depuración (🧹)
 Deja sólo a los empleados activos. Requiere haber sincronizado con Odoo.
 - **Se conservan**: vinculados con Odoo y activos.
-- **Se eliminan** (sistema y checadores ZKTeco con lectura directa, con sus huellas): archivados en Odoo, duplicados con número de más de 9 dígitos, y quienes no están en Odoo y no checan desde hace N días.
+- **Se dan de baja y se archivan** (en el checador ZKTeco se borra el usuario con sus huellas): archivados en Odoo, duplicados con número de más de 9 dígitos, y quienes no están en Odoo y no checan desde hace N días.
 - **A revisar** (no se tocan): no están en Odoo pero checaron en los últimos N días.
-- **Checadas**: se borran las anteriores a la fecha elegida y, desde entonces, el sistema rechaza checadas anteriores a esa fecha (aunque el checador las vuelva a enviar).
+- **Checadas**: las anteriores a la fecha elegida pasan al archivo histórico; las que lleguen después con fecha anterior también van al archivo.
 - Opcional: vaciar la memoria de checadas del equipo (primero se leen sus últimas checadas).
 - Nunca se borran los administradores del checador. Antes de aplicar se guarda un respaldo en `data/respaldos/`. Requiere escribir `DEPURAR` para confirmar.
+
+## Huellas (☝️)
+Estado por empleado y checador (sin alta, sin huella, huella pendiente, registrada), leído de las plantillas del equipo. **Agregar huella** da de alta a la persona en el checador elegido con un **PIN** (para checar mientras registra su huella), actualiza su nombre al de Odoo, guarda el PIN en Odoo y genera comprobantes para imprimir. La sincronización detecta automáticamente cuando la huella quedó registrada.
 
 ## Reglas del reporte
 - Entrada = primer registro del día (o primera "entrada" explícita); salida = último registro (o última "salida").

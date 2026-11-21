@@ -160,7 +160,7 @@ views.registros = { title: 'Registros de checada', async render(el, q) {
       <td>${r.lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${r.lat},${r.lng}">📍 Ver mapa</a> <span class="small muted">±${Math.round(r.precision_m || 0)} m</span>` : esc(r.dispositivo || '')}</td>
       <td>${geoBadge(r)}</td><td>${r.foto ? `<a target="_blank" href="/api/fotos/${encodeURIComponent(r.foto)}">📷 Ver</a>` : ''}</td>
       <td class="small" style="white-space:normal;max-width:260px">${esc(r.nota || '')}${r.creado_por ? ` <span class="muted">(${esc(r.creado_por)})</span>` : ''}</td>
-      ${isAdmin() ? `<td><button class="btn sm danger" data-del="${r.id}">Eliminar</button></td>` : ''}</tr>`).join('')}
+      ${isAdmin() ? `<td>${r.anulado ? `<span class="badge" title="${esc(r.anulado_motivo || '')}">Anulado por ${esc(r.anulado_por || '')}</span>` : `<button class="btn sm danger" data-del="${r.id}">Anular</button>`}</td>` : ''}</tr>`).join('')}
     </tbody></table></div>
     <div class="pager"><span class="muted">${f.offset + 1}–${f.offset + d.rows.length} de ${d.total}</span>
       <span><button class="btn sm" id="prev" ${f.offset ? '' : 'disabled'}>← Anterior</button> <button class="btn sm" id="next" ${f.offset + d.rows.length < d.total ? '' : 'disabled'}>Siguiente →</button></span></div>`
@@ -168,10 +168,10 @@ views.registros = { title: 'Registros de checada', async render(el, q) {
   const go = (off) => { location.hash = '#/registros?' + qs({ ...f, offset: off, limit: '' }); };
   $('#prev', el) && ($('#prev', el).onclick = () => go(Math.max(0, f.offset - 100)));
   $('#next', el) && ($('#next', el).onclick = () => go(f.offset + 100));
-  el.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
-    if (!confirmar('¿Eliminar este registro de asistencia? Esta acción no se puede deshacer.')) return;
-    await api('/registros/' + b.dataset.del, { method: 'DELETE' }); toast('Registro eliminado'); route();
-  });
+  el.querySelectorAll('[data-del]').forEach((b) => b.onclick = () => modal('Anular checada', `
+    <p class="full small muted" style="margin:0">La checada no se borra: queda anulada (no cuenta en reportes) y se registra en la bitácora con tu usuario y el motivo.</p>
+    ${field('Motivo de la anulación', '<textarea name="motivo" rows="2" required minlength="5" placeholder="Ej. Checada duplicada, error del checador…"></textarea>', true)}`,
+    async (d) => { await api(`/registros/${b.dataset.del}/anular`, { method: 'POST', body: d }); toast('Checada anulada'); route(); }, { submitText: 'Anular' }));
   el.querySelectorAll('[data-alta]').forEach((a) => a.onclick = (e) => { e.preventDefault(); editarEmpleado({ numero: a.dataset.alta }); });
 } };
 
@@ -189,13 +189,13 @@ async function registroManual() {
 
 views.empleados = { title: 'Empleados', async render(el, q) {
   await loadCatalogos();
-  const all = await api('/empleados');
+  const all = await api('/empleados' + (q.inactivos ? '?archivados=1' : ''));
   const buscar = (q.buscar || '').toLowerCase();
   const list = all.filter((e) => (!buscar || (e.nombre + ' ' + e.numero).toLowerCase().includes(buscar)) && (q.inactivos ? true : e.activo));
   el.innerHTML = `
     <form class="toolbar" id="flt">
       ${field('Buscar', inp('buscar', q.buscar || '', 'placeholder="Nombre o número"'))}
-      <label class="f">&nbsp;<span><input type="checkbox" name="inactivos" value="1" ${q.inactivos ? 'checked' : ''}> Mostrar inactivos</span></label>
+      <label class="f">&nbsp;<span><input type="checkbox" name="inactivos" value="1" ${q.inactivos ? 'checked' : ''}> Mostrar bajas</span></label>
       <button class="btn">Filtrar</button>
       <a class="btn" href="/api/empleados.csv">⬇ Exportar CSV</a>
       ${isAdmin() ? '<button type="button" class="btn primary" id="add">＋ Nuevo empleado</button>' : ''}
@@ -206,7 +206,7 @@ views.empleados = { title: 'Empleados', async render(el, q) {
     ${list.map((e) => `<tr><td class="mono">${esc(e.numero)}</td><td><b>${esc(e.nombre)}</b></td><td>${esc(e.puesto || '')}</td><td>${esc(e.empresa || '')}</td>
       <td>${esc(e.sede || '')}</td><td class="small">${esc(e.horario || '')}</td><td><span class="badge ${e.tipo === 'campo' ? 'ok' : e.tipo === 'mixto' ? 'info' : 'pri'}">${esc(e.tipo)}</span></td>
       <td>${e.tipo === 'oficina' ? '' : e.tiene_pin ? '<span class="badge ok">Asignado</span>' : '<span class="badge warn">Falta PIN</span>'}</td>
-      <td>${e.activo ? '<span class="badge ok">Activo</span>' : '<span class="badge">Inactivo</span>'}</td>
+      <td>${e.activo ? '<span class="badge ok">Activo</span>' : `<span class="badge">Baja${e.fecha_baja ? ' ' + esc(e.fecha_baja) : ''}</span>${e.archivado ? ' <span class="badge">Archivado</span>' : ''}`}</td>
       <td>${isAdmin() ? `<button class="btn sm" data-ed="${e.id}">Editar</button>` : ''} <a class="btn sm" href="#/asistencia?empleado_id=${e.id}">Asistencia</a></td></tr>`).join('')}
     </tbody></table></div>` : '<div class="empty card">No hay empleados.</div>'}`;
   $('#flt', el).onsubmit = (e) => { e.preventDefault(); location.hash = '#/empleados?' + qs(Object.fromEntries(new FormData(e.target))); };
@@ -228,9 +228,12 @@ async function editarEmpleado(e) {
     ${field('Tipo de registro', sel('tipo', [['oficina', 'Oficina (checador)'], ['campo', 'Campo (celular)'], ['mixto', 'Mixto (ambos)']].map(([v, t]) => `<option value="${v}" ${e.tipo === v ? 'selected' : ''}>${t}</option>`).join('')))}
     ${field(nuevo ? 'PIN para campo (4–8 dígitos)' : 'Nuevo PIN (dejar vacío para no cambiar)', inp('pin', '', 'inputmode="numeric" pattern="[0-9]{4,8}" autocomplete="off"'))}
     ${nuevo ? '' : field('Estado', sel('activo', `<option value="1" ${e.activo ? 'selected' : ''}>Activo</option><option value="0" ${!e.activo ? 'selected' : ''}>Inactivo (baja)</option>`))}
+    ${field('CURP', inp('curp', e.curp || '', 'maxlength="18" style="text-transform:uppercase"'))}${field('RFC', inp('rfc', e.rfc || '', 'maxlength="13" style="text-transform:uppercase"'))}
+    ${field('NSS', inp('nss', e.nss || '', 'maxlength="11" inputmode="numeric"'))}
     <p class="small muted full" style="margin:0">La geocerca del personal de campo es la ubicación y el radio de su sede.</p>`,
   async (d) => {
     if (!d.pin) delete d.pin;
+    for (const k of ['curp', 'rfc']) if (d[k]) d[k] = d[k].toUpperCase().trim();
     if ('activo' in d) d.activo = d.activo === '1';
     if ((d.tipo === 'campo' || d.tipo === 'mixto') && nuevo && !d.pin) throw new Error('Asigna un PIN para que pueda registrarse desde el celular');
     await api(nuevo ? '/empleados' : '/empleados/' + e.id, { method: nuevo ? 'POST' : 'PUT', body: d });
@@ -376,9 +379,12 @@ views.catalogos = { title: 'Empresas, sedes y horarios', async render(el, q) {
   const delBtn = (ent, id) => `<button class="btn sm danger" data-del="${ent}/${id}">Eliminar</button>`;
   if (tab === 'empresas') {
     t.innerHTML = `<div class="toolbar"><button class="btn primary" id="add">＋ Nueva empresa</button></div>
-      <div class="table-wrap"><table><thead><tr><th>Empresa</th><th></th></tr></thead><tbody>
-      ${empresas.map((e) => `<tr><td><b>${esc(e.nombre)}</b></td><td style="text-align:right"><button class="btn sm" data-ed="${e.id}">Editar</button> ${delBtn('empresas', e.id)}</td></tr>`).join('')}</tbody></table></div>`;
-    const form = (e = {}) => modal(e.id ? 'Editar empresa' : 'Nueva empresa', field('Nombre', inp('nombre', e.nombre, 'required'), true),
+      <div class="table-wrap"><table><thead><tr><th>Empresa</th><th>Razón social</th><th>RFC</th><th>Registro patronal</th><th></th></tr></thead><tbody>
+      ${empresas.map((e) => `<tr><td><b>${esc(e.nombre)}</b></td><td>${esc(e.razon_social || '')}</td><td class="mono">${esc(e.rfc || '')}</td><td class="mono">${esc(e.registro_patronal || '')}</td><td style="text-align:right"><button class="btn sm" data-ed="${e.id}">Editar</button> ${delBtn('empresas', e.id)}</td></tr>`).join('')}</tbody></table></div>`;
+    const form = (e = {}) => modal(e.id ? 'Editar empresa' : 'Nueva empresa', `${field('Nombre', inp('nombre', e.nombre, 'required'), true)}
+      ${field('Razón social', inp('razon_social', e.razon_social || ''), true)}${field('RFC', inp('rfc', e.rfc || '', 'maxlength="13" style="text-transform:uppercase"'))}
+      ${field('Registro patronal IMSS', inp('registro_patronal', e.registro_patronal || ''))}
+      <p class="small muted full" style="margin:0">Estos datos aparecen en el encabezado del Registro de jornada.</p>`,
       async (d) => { await api(e.id ? '/empresas/' + e.id : '/empresas', { method: e.id ? 'PUT' : 'POST', body: d }); route(); });
     $('#add', t).onclick = () => form();
     t.querySelectorAll('[data-ed]').forEach((b) => b.onclick = () => form(empresas.find((x) => x.id == b.dataset.ed)));
@@ -551,8 +557,10 @@ views.depurar = { title: 'Depuración de empleados y checadas', async render(el)
   const mes = today().slice(0, 8) + '01';
   el.innerHTML = `
     <form class="card" id="f" style="margin-bottom:14px">
-      <p class="muted" style="margin-top:0">Deja sólo a los empleados activos. <b>Se conservan</b> los vinculados con Odoo; <b>se eliminan</b> los archivados en Odoo, los duplicados y los que no están en Odoo y no han checado recientemente.
+      <p class="muted" style="margin-top:0">Deja sólo a los empleados activos. <b>Se conservan</b> los vinculados con Odoo; <b>se dan de baja</b> los archivados en Odoo, los duplicados y los que no están en Odoo y no han checado recientemente.
       Los que no están en Odoo pero <b>sí checaron</b> se muestran para revisión y no se tocan.</p>
+      <div class="help" style="margin-bottom:12px">⚖️ Por obligación legal (LFT art. 132 fr. XXXIV y art. 804) <b>nada se borra del sistema</b>: las bajas y las checadas viejas pasan al <b>archivo histórico</b>,
+      salen de las pantallas y reportes del día a día y se pueden consultar en <a href="#/jornada">Registro de jornada</a> cuando lo pida la autoridad. Del checador físico sí se borran los usuarios.</div>
       <div class="toolbar" style="margin:0">
         ${field('Conservar checadas desde', `<input type="date" name="desde" value="${esc(info.asistencia_desde || mes)}">`)}
         ${field('Inactivo si no checa en (días)', inp('dias', '30', 'type="number" min="1" max="365" style="width:120px"'))}
@@ -561,7 +569,7 @@ views.depurar = { title: 'Depuración de empleados y checadas', async render(el)
         <button class="btn primary">Vista previa</button>
       </div>
       ${info.asistencia_desde ? `<p class="small muted" style="margin:8px 0 0">Actualmente se aceptan checadas desde el <b>${esc(info.asistencia_desde)}</b>.</p>` : ''}
-      ${info.ultima ? `<p class="small muted" style="margin:4px 0 0">Última depuración: ${esc(info.ultima.fecha)} · ${info.ultima.empleados_eliminados} empleados y ${info.ultima.checadas_borradas} checadas eliminados.</p>` : ''}
+      ${info.ultima ? `<p class="small muted" style="margin:4px 0 0">Última depuración: ${esc(info.ultima.fecha)} · ${info.ultima.empleados_archivados ?? info.ultima.empleados_eliminados} bajas y ${info.ultima.checadas_archivadas ?? info.ultima.checadas_borradas} checadas archivadas.</p>` : ''}
     </form>
     <div id="out"></div>`;
   const datos = () => { const d = Object.fromEntries(new FormData($('#f', el))); d.borrar_en_checador = !!d.borrar_en_checador; d.vaciar_memoria = !!d.vaciar_memoria; return d; };
@@ -577,13 +585,13 @@ views.depurar = { title: 'Depuración de empleados y checadas', async render(el)
       $('#out', el).innerHTML = `
         <div class="grid kpis">
           <div class="card kpi ok"><div class="label">Se conservan</div><div class="value">${p.conservar}</div><div class="small muted">vinculados con Odoo</div></div>
-          <div class="card kpi bad"><div class="label">Se eliminan</div><div class="value">${p.eliminar.length}</div><div class="small muted">del sistema</div></div>
+          <div class="card kpi bad"><div class="label">Se dan de baja</div><div class="value">${p.eliminar.length}</div><div class="small muted">se archivan con su historial</div></div>
           <div class="card kpi warn"><div class="label">A revisar</div><div class="value">${p.revisar.length}</div><div class="small muted">checan pero no están en Odoo</div></div>
           <div class="card kpi bad"><div class="label">Usuarios a borrar del checador</div><div class="value">${d.borrar_en_checador ? totBorrarDev : 0}</div></div>
-          <div class="card kpi"><div class="label">Checadas a borrar</div><div class="value">${p.checadas_viejas + p.checadas_de_eliminados}</div><div class="small muted">anteriores al ${esc(p.desde)}</div></div>
+          <div class="card kpi"><div class="label">Checadas al archivo</div><div class="value">${p.checadas_viejas + p.checadas_de_eliminados}</div><div class="small muted">anteriores al ${esc(p.desde)} y de las bajas</div></div>
         </div>
         <div class="grid two" style="align-items:start">
-          <div class="card"><h2>Se eliminan (${p.eliminar.length})</h2>${tabla(p.eliminar, [['No.', (r) => r.numero], ['Nombre', (r) => r.nombre], ['Última checada', (r) => r.ultima || 'nunca'], ['Motivo', (r) => r.motivo]])}</div>
+          <div class="card"><h2>Se dan de baja (${p.eliminar.length})</h2>${tabla(p.eliminar, [['No.', (r) => r.numero], ['Nombre', (r) => r.nombre], ['Última checada', (r) => r.ultima || 'nunca'], ['Motivo', (r) => r.motivo]])}</div>
           <div class="card"><h2>A revisar (${p.revisar.length})</h2><p class="small muted">Siguen checando pero no están vinculados con Odoo. No se borran: vincúlalos en <a href="#/odoo">Odoo</a> o dales de alta allá.</p>
             ${tabla(p.revisar, [['No.', (r) => r.numero], ['Nombre', (r) => r.nombre], ['Última checada', (r) => r.ultima]])}</div>
         </div>
@@ -595,7 +603,7 @@ views.depurar = { title: 'Depuración de empleados y checadas', async render(el)
           ${d.borrar_en_checador ? tabla(c.borrar, [['No.', (r) => r.numero], ['Nombre en el checador', (r) => r.nombre], ['Última checada', (r) => r.ultima || 'nunca']]) : ''}`}</div>`).join('')}
         <div class="card" style="margin-top:14px;border-color:var(--bad)">
           <h2>Aplicar depuración</h2>
-          <p class="small">Se guardará un respaldo de la base de datos antes de aplicar. <b>Lo que se borre del checador (usuarios y huellas) no se puede recuperar.</b></p>
+          <p class="small">Se guardará un respaldo de la base de datos antes de aplicar. En el sistema nada se borra (se archiva). <b>Lo que se borre del checador (usuarios y huellas) no se puede recuperar.</b></p>
           <div class="toolbar" style="margin:0">${field('Escribe DEPURAR para confirmar', inp('conf', '', 'id="conf" autocomplete="off"'))}<button class="btn primary" id="go" style="background:var(--bad);border-color:var(--bad)">Aplicar</button></div>
         </div>`;
       $('#go', el).onclick = async () => {
@@ -604,7 +612,7 @@ views.depurar = { title: 'Depuración de empleados y checadas', async render(el)
         try {
           const r = await api('/depurar/aplicar', { method: 'POST', body: { ...d, confirmacion: 'DEPURAR' } });
           $('#out', el).innerHTML = `<div class="card"><h2>Depuración terminada ✅</h2>
-            <p>${r.empleados_eliminados} empleados y ${r.checadas_borradas} checadas eliminados del sistema.</p>
+            <p>${r.empleados_archivados} empleados dados de baja y ${r.checadas_archivadas} checadas enviadas al archivo histórico.</p>
             ${r.checadores.map((c) => `<p><b>${esc(c.dispositivo)}:</b> ${c.error ? `<span style="color:var(--bad)">${esc(c.error)}</span>` : `${(c.borrados || []).length} usuarios borrados${(c.protegidos || []).length ? `, ${c.protegidos.length} administradores conservados` : ''}${c.memoria_vaciada ? ', memoria de checadas vaciada' : ''}`}</p>`).join('')}
             <p class="small muted">Respaldo: <code>${esc(r.respaldo)}</code></p></div>`;
         } catch (e) { toast(e.message, true); b.disabled = false; b.textContent = 'Aplicar'; }
@@ -744,11 +752,91 @@ views.huellas = { title: 'Registro de huellas', async render(el, q) {
   if (!st.data.filas.some((f) => f.revisado_en) && isAdmin()) $('#scan', el).click();
 } };
 
+const lunesLocal = (d) => { const x = new Date(d + 'T12:00:00'); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 10); };
+const horasTxt = (h) => { const n = Number(h || 0); const hh = Math.floor(n); const mm = Math.round((n - hh) * 60); return n ? `${hh}:${String(mm).padStart(2, '0')}` : '—'; };
+
+views.jornada = { title: 'Registro de jornada', async render(el, q) {
+  await loadCatalogos();
+  const hoy = today(), lun = lunesLocal(hoy);
+  const presets = { semana: [lun, hoy], pasada: [addDays(lun, -7), addDays(lun, -1)], quincena: [hoy.slice(8) <= '15' ? hoy.slice(0, 8) + '01' : hoy.slice(0, 8) + '16', hoy], mes: [hoy.slice(0, 8) + '01', hoy] };
+  const f = { desde: q.desde || presets.pasada[0], hasta: q.hasta || presets.pasada[1], empresa_id: q.empresa_id || '', empleado_id: q.empleado_id || '' };
+  const emps = await api('/empleados?archivados=1');
+  el.innerHTML = `
+    <div class="help" style="margin-bottom:14px">⚖️ Formato de <b>registro electrónico de la jornada</b> (LFT art. 132 fr. XXXIV): inicio y fin de jornada, descansos, horas efectivas y extra, medio de registro y conformidad del trabajador.
+      Incluye el archivo histórico y a las personas dadas de baja. Jornada máxima semanal aplicada: 48 h en 2026, 46 h en 2027 (reducción gradual hasta 40 h en 2030).</div>
+    <form class="toolbar card" id="flt">
+      <div class="chips" style="margin:0;width:100%">${Object.entries({ semana: 'Esta semana', pasada: 'Semana pasada', quincena: 'Quincena', mes: 'Este mes' }).map(([k, t]) => `<button type="button" class="chip ${presets[k][0] === f.desde && presets[k][1] === f.hasta ? 'on' : ''}" data-p="${k}">${t}</button>`).join('')}</div>
+      ${field('Desde', `<input type="date" name="desde" value="${f.desde}">`)}${field('Hasta', `<input type="date" name="hasta" value="${f.hasta}">`)}
+      ${state.me.empresa_id ? '' : field('Empresa', sel('empresa_id', opts(state.cat.empresas, f.empresa_id)))}
+      ${field('Empleado', sel('empleado_id', opts(emps, f.empleado_id, 'Todos')))}
+      <button class="btn primary">Consultar</button>
+      <a class="btn" href="/api/jornada.csv?${qs(f)}">⬇ Excel (CSV)</a>
+      <button type="button" class="btn" id="print">🖨️ Imprimir formato</button>
+    </form>
+    <div id="res"><div class="card"><div class="skeleton"></div><div class="skeleton" style="margin-top:10px;width:70%"></div></div></div>`;
+  el.querySelectorAll('[data-p]').forEach((b) => b.onclick = () => { const [d, h] = presets[b.dataset.p]; location.hash = '#/jornada?' + qs({ ...f, desde: d, hasta: h }); });
+  $('#flt', el).onsubmit = (e) => { e.preventDefault(); location.hash = '#/jornada?' + qs(Object.fromEntries(new FormData(e.target))); };
+  const r = await api('/jornada?' + qs(f));
+  const diasDe = (w) => r.dias.filter((d) => d.empleado_id === w.empleado_id && d.semana === w.semana);
+  const tot = r.semanas.reduce((a, w) => ({ h: a.h + w.horas, x: a.x + w.extra, exc: a.exc + (w.excede ? 1 : 0), conf: a.conf + (w.conformidad ? 1 : 0) }), { h: 0, x: 0, exc: 0, conf: 0 });
+  $('#res', el).innerHTML = `
+    <div class="grid kpis">
+      <div class="card kpi"><div class="label">Horas efectivas</div><div class="value">${horasTxt(tot.h)}</div></div>
+      <div class="card kpi warn"><div class="label">Horas extra</div><div class="value">${horasTxt(tot.x)}</div></div>
+      <div class="card kpi bad"><div class="label">Semanas sobre el límite</div><div class="value">${tot.exc}</div></div>
+      <div class="card kpi ok"><div class="label">Conformidad del trabajador</div><div class="value">${tot.conf}<span class="small muted"> / ${r.semanas.length}</span></div><div class="small muted">semanas confirmadas</div></div>
+    </div>
+    ${r.semanas.length ? `<div class="table-wrap"><table><thead><tr><th></th><th>Semana</th><th>No.</th><th>Empleado</th><th>Empresa</th><th class="num">Días</th><th>Horas vs. límite</th><th class="num">Extra</th><th>Conformidad</th></tr></thead><tbody>
+    ${r.semanas.map((w, i) => { const pct = Math.min(100, (w.horas / w.limite) * 100); return `<tr class="expand" data-i="${i}"><td>▸</td><td>${esc(w.semana)}</td><td class="mono">${esc(w.numero)}</td><td><b>${esc(w.nombre)}</b></td><td class="small">${esc(w.empresa || '')}</td>
+      <td class="num">${w.dias}</td><td><div style="display:flex;gap:8px;align-items:center"><div class="meter ${w.excede ? 'bad' : pct > 90 ? 'warn' : ''}" style="flex:1"><span style="width:${pct}%"></span></div><span class="small">${horasTxt(w.horas)} / ${w.limite} h</span></div></td>
+      <td class="num">${w.extra ? horasTxt(w.extra) : ''}</td><td>${w.conformidad ? `<span class="badge ok" title="${esc(w.conformidad)}">✔ Confirmada</span>` : '<span class="badge">Pendiente</span>'}</td></tr>
+      <tr class="detalle hidden" data-d="${i}"><td></td><td colspan="8"><table><thead><tr><th>Fecha</th><th>Entradas y salidas</th><th class="num">Descanso</th><th class="num">Efectivas</th><th class="num">Extra</th><th>Medio</th><th>Estado</th><th>Incidencias</th></tr></thead><tbody>
+        ${diasDe(w).map((d) => `<tr><td>${esc(d.fecha)}</td><td><span class="pares">${d.pares.map((x) => `<span>${x[0] || '¿?'} – ${x[1] || '¿?'}</span>`).join('')}</span></td>
+          <td class="num">${d.descanso_min ? d.descanso_min + ' min' : ''}</td><td class="num">${horasTxt(d.efectivas)}</td><td class="num">${d.extra ? horasTxt(d.extra) : ''}</td>
+          <td class="small">${esc(d.medio)}</td><td>${estadoBadge(d.estado)}</td><td class="small">${d.incidencias.map(esc).join('; ')}</td></tr>`).join('')}</tbody></table></td></tr>`; }).join('')}
+    </tbody></table></div>` : '<div class="empty card">Sin registros en el periodo.</div>'}`;
+  el.querySelectorAll('[data-i]').forEach((tr) => tr.onclick = () => { const d = el.querySelector(`[data-d="${tr.dataset.i}"]`); d.classList.toggle('hidden'); tr.firstElementChild.textContent = d.classList.contains('hidden') ? '▸' : '▾'; });
+  $('#print', el).onclick = () => {
+    const porEmp = new Map(); for (const d of r.dias) { if (!porEmp.has(d.empleado_id)) porEmp.set(d.empleado_id, []); porEmp.get(d.empleado_id).push(d); }
+    const emp = (id) => r.empresas.find((x) => x.id === id) || {};
+    $('#print-area').innerHTML = [...porEmp.values()].map((dias) => { const d0 = dias[0], em = emp(d0.empresa_id), ws = r.semanas.filter((w) => w.empleado_id === d0.empleado_id); return `<div class="formato">
+      <h2>Registro electrónico de la jornada laboral</h2>
+      <div>Patrón: <b>${esc(em.razon_social || em.nombre || d0.empresa || '')}</b> · RFC: ${esc(em.rfc || '—')} · Registro patronal: ${esc(em.registro_patronal || '—')}</div>
+      <div>Trabajador: <b>${esc(d0.nombre)}</b> · No. ${esc(d0.numero)} · Puesto: ${esc(d0.puesto || '—')} · CURP: ${esc(d0.curp || '—')} · RFC: ${esc(d0.rfc || '—')} · NSS: ${esc(d0.nss || '—')}</div>
+      <div>Periodo: ${esc(r.desde)} al ${esc(r.hasta)} · Emitido: ${esc(new Date().toLocaleString('es-MX'))}</div>
+      <table><thead><tr><th>Fecha</th><th>Inicio</th><th>Fin</th><th>Entradas y salidas</th><th>Descanso</th><th>Horas efectivas</th><th>Horas extra</th><th>Medio de registro</th><th>Observaciones</th></tr></thead><tbody>
+      ${dias.map((d) => `<tr><td>${esc(d.fecha)}</td><td>${esc(d.entrada || '')}</td><td>${esc(d.salida || '')}</td><td>${d.pares.map((x) => `${x[0] || '¿?'}–${x[1] || '¿?'}`).join(', ')}</td><td>${d.descanso_min ? d.descanso_min + ' min' : ''}</td>
+        <td>${horasTxt(d.efectivas)}</td><td>${d.extra ? horasTxt(d.extra) : ''}</td><td>${esc(d.medio)}</td><td>${esc([d.estado, ...d.incidencias].filter(Boolean).join('; '))}</td></tr>`).join('')}</tbody></table>
+      <table><thead><tr><th>Semana</th><th>Horas efectivas</th><th>Jornada máxima</th><th>Horas extra</th><th>Conformidad electrónica del trabajador</th></tr></thead><tbody>
+      ${ws.map((w) => `<tr><td>${esc(w.semana)}</td><td>${horasTxt(w.horas)}</td><td>${w.limite} h</td><td>${horasTxt(w.extra)}</td><td>${w.conformidad ? 'Confirmada el ' + esc(w.conformidad) : 'Pendiente'}</td></tr>`).join('')}</tbody></table>
+      <div class="firmas"><div>Nombre y firma del trabajador</div><div>Nombre y firma del representante del patrón</div></div></div>`; }).join('') || '<p>Sin registros.</p>';
+    setTimeout(() => window.print(), 50);
+  };
+} };
+
+views.bitacora = { title: 'Bitácora de cambios', async render(el, q) {
+  const f = { desde: q.desde || addDays(today(), -30), hasta: q.hasta || today(), buscar: q.buscar || '', offset: Number(q.offset) || 0 };
+  el.innerHTML = `<div class="help" style="margin-bottom:14px">Registro inalterable de las acciones hechas por personas: capturas y anulaciones de checadas, cambios de empleados, altas en checadores, depuraciones, configuración y conformidades. No se puede editar ni borrar.</div>
+    <form class="toolbar card" id="flt">${field('Desde', `<input type="date" name="desde" value="${f.desde}">`)}${field('Hasta', `<input type="date" name="hasta" value="${f.hasta}">`)}
+      <div class="searchbox">${inp('buscar', f.buscar, 'placeholder="Usuario, acción o dato…"')}</div><button class="btn primary">Filtrar</button></form><div id="res"></div>`;
+  $('#flt', el).onsubmit = (e) => { e.preventDefault(); location.hash = '#/bitacora?' + qs(Object.fromEntries(new FormData(e.target))); };
+  const r = await api('/bitacora?' + qs({ ...f, limit: 100 }));
+  const fmt = (d) => { try { const o = JSON.parse(d); return Object.entries(o).map(([k, v]) => `<b>${esc(k)}</b>: ${esc(typeof v === 'object' ? JSON.stringify(v) : v)}`).join(' · '); } catch { return esc(d || ''); } };
+  $('#res', el).innerHTML = r.rows.length ? `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Usuario</th><th>Acción</th><th>Referencia</th><th>Detalle</th></tr></thead><tbody>
+    ${r.rows.map((x) => `<tr><td class="mono small">${esc(x.fecha)}</td><td>${esc(x.usuario)}</td><td><b>${esc(x.accion)}</b></td><td class="small">${esc([x.entidad, x.entidad_id].filter(Boolean).join(' #'))}</td>
+      <td class="small" style="white-space:normal;max-width:520px">${fmt(x.detalle)}</td></tr>`).join('')}</tbody></table></div>
+    <div class="pager"><span class="muted">${f.offset + 1}–${f.offset + r.rows.length} de ${r.total}</span><span>
+      <button class="btn sm" id="prev" ${f.offset ? '' : 'disabled'}>← Anterior</button> <button class="btn sm" id="next" ${f.offset + r.rows.length < r.total ? '' : 'disabled'}>Siguiente →</button></span></div>`
+    : '<div class="empty card">Sin movimientos en el periodo.</div>';
+  $('#prev', el) && ($('#prev', el).onclick = () => { location.hash = '#/bitacora?' + qs({ ...f, offset: Math.max(0, f.offset - 100) }); });
+  $('#next', el) && ($('#next', el).onclick = () => { location.hash = '#/bitacora?' + qs({ ...f, offset: f.offset + 100 }); });
+} };
+
 // ---------------- Router ----------------
 async function route() {
   const [p, query] = (location.hash.slice(2) || 'tablero').split('?');
   let name = views[p] ? p : 'tablero';
-  if (!isAdmin() && ['dispositivos', 'importar', 'catalogos', 'usuarios', 'odoo', 'depurar'].includes(name)) name = 'tablero';
+  if (!isAdmin() && ['dispositivos', 'importar', 'catalogos', 'usuarios', 'odoo', 'depurar', 'bitacora'].includes(name)) name = 'tablero';
   const v = views[name];
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.r === name));
   $('#title').textContent = v.title;

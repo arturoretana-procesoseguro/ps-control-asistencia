@@ -5,7 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { db, DATA_DIR } = require('./db');
 const U = require('./util');
-const { calcularAsistencia, resumen } = require('./reporte');
+const { calcularAsistencia, resumen, registroJornada, lunesDe, addDays: sumarDias } = require('./reporte');
 const { interpretar } = require('./importar');
 const { nuevoToken } = require('./dispositivos');
 const zkSync = require('./zk-sync');
@@ -57,8 +57,8 @@ api.post('/campo/login', wrap((req, res) => {
   const key = 'e:' + numero;
   if (bloqueado(key)) return res.status(429).json({ error: 'Demasiados intentos. Espera 10 minutos.' });
   const e = db.prepare('SELECT * FROM empleados WHERE numero = ? AND activo = 1').get(String(numero || '').trim());
-  if (!e || !e.pin_hash || !U.checkPassword(pin, e.pin_hash)) { fallo(key); return res.status(401).json({ error: 'Número de empleado o PIN incorrectos' }); }
-  if (e.tipo === 'oficina') return res.status(403).json({ error: 'Tu perfil está configurado sólo para checador de oficina. Consulta a Recursos Humanos.' });
+  const okPin = e && ((e.pin_hash && U.checkPassword(pin, e.pin_hash)) || (e.pin_checador && String(pin) === e.pin_checador));
+  if (!okPin) { fallo(key); return res.status(401).json({ error: 'Número de empleado o PIN incorrectos' }); }
   intentos.delete(key);
   U.setCookie(res, 'eid', U.sign({ kind: 'empleado', id: e.id, numero: e.numero }, 24 * 30), 24 * 30);
   res.json({ ok: true });
@@ -66,7 +66,7 @@ api.post('/campo/login', wrap((req, res) => {
 api.post('/campo/logout', (req, res) => { U.clearCookie(res, 'eid'); res.json({ ok: true }); });
 
 api.get('/campo/me', U.requireEmpleado, wrap((req, res) => {
-  const e = db.prepare(`SELECT e.id, e.numero, e.nombre, e.puesto, em.nombre empresa, s.nombre sede, s.lat, s.lng, s.radio_m,
+  const e = db.prepare(`SELECT e.id, e.numero, e.nombre, e.puesto, e.tipo, em.nombre empresa, s.nombre sede, s.lat, s.lng, s.radio_m,
                                h.entrada h_entrada, h.salida h_salida
                         FROM empleados e LEFT JOIN empresas em ON em.id=e.empresa_id
                         LEFT JOIN sedes s ON s.id=e.sede_id LEFT JOIN horarios h ON h.id=e.horario_id
@@ -74,7 +74,7 @@ api.get('/campo/me', U.requireEmpleado, wrap((req, res) => {
   if (!e) return res.status(401).json({ error: 'Empleado inactivo' });
   const hoy = U.nowLocal().slice(0, 10);
   const registros = db.prepare(`SELECT fecha_hora, tipo, origen, dentro_geocerca FROM registros
-                                WHERE empleado_numero = ? AND fecha_hora >= ? ORDER BY fecha_hora`).all(e.numero, hoy + ' 00:00:00');
+                                WHERE empleado_numero = ? AND fecha_hora >= ? AND anulado = 0 ORDER BY fecha_hora`).all(e.numero, hoy + ' 00:00:00');
   res.json({ empleado: e, hoy: registros });
 }));
 
@@ -82,6 +82,7 @@ api.post('/campo/checar', U.requireEmpleado, wrap((req, res) => {
   const e = db.prepare(`SELECT e.*, s.lat s_lat, s.lng s_lng, s.radio_m FROM empleados e
                         LEFT JOIN sedes s ON s.id=e.sede_id WHERE e.id = ? AND e.activo = 1`).get(req.empleado.id);
   if (!e) return res.status(401).json({ error: 'Empleado inactivo' });
+  if (e.tipo === 'oficina') return res.status(403).json({ error: 'Tu asistencia se registra en el checador de la oficina.' });
   const { tipo, lat, lng, precision, foto, nota } = req.body || {};
   if (!['entrada', 'salida'].includes(tipo)) return res.status(400).json({ error: 'Indica entrada o salida' });
   if (typeof lat !== 'number' || typeof lng !== 'number') return res.status(400).json({ error: 'Se requiere la ubicación GPS para registrar asistencia' });
@@ -109,6 +110,30 @@ api.post('/campo/checar', U.requireEmpleado, wrap((req, res) => {
   res.json({ ok: true, fecha_hora: fh, tipo, distancia_m: distancia, dentro_geocerca: dentro });
 }));
 
+// Registro de jornada del propio trabajador y su conformidad (LFT art. 132 fr. XXXIV)
+api.get('/campo/semana', U.requireEmpleado, wrap((req, res) => {
+  const hoy = U.nowLocal().slice(0, 10);
+  const semana = /^\d{4}-\d{2}-\d{2}$/.test(req.query.semana || '') ? lunesDe(req.query.semana) : lunesDe(sumarDias(hoy, -7));
+  const fin = sumarDias(semana, 6);
+  const r = registroJornada({ desde: semana, hasta: fin < hoy ? fin : hoy, empleado_id: req.empleado.id });
+  const conf = db.prepare('SELECT fecha, comentario FROM conformidades WHERE empleado_id = ? AND semana = ?').get(req.empleado.id, semana);
+  res.json({ semana, fin, cerrada: fin < hoy, dias: r.dias.map((d) => ({ fecha: d.fecha, entrada: d.entrada, salida: d.salida, pares: d.pares, descanso_min: d.descanso_min, efectivas: d.efectivas, extra: d.extra, estado: d.estado, medio: d.medio, incidencias: d.incidencias })),
+    total: r.semanas[0] || null, conformidad: conf || null });
+}));
+api.post('/campo/conformidad', U.requireEmpleado, wrap((req, res) => {
+  const semana = lunesDe(String(req.body?.semana || ''));
+  const hoy = U.nowLocal().slice(0, 10);
+  if (sumarDias(semana, 6) >= hoy) return res.status(400).json({ error: 'Sólo se puede confirmar una semana que ya terminó' });
+  const r = registroJornada({ desde: semana, hasta: sumarDias(semana, 6), empleado_id: req.empleado.id });
+  const detalle = JSON.stringify(r.dias.map((d) => [d.fecha, d.pares, d.efectivas, d.extra]));
+  const huella = require('node:crypto').createHash('sha256').update(detalle).digest('hex');
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  db.prepare(`INSERT INTO conformidades (empleado_id, semana, resumen, huella, ip, comentario) VALUES (?,?,?,?,?,?)
+              ON CONFLICT(empleado_id, semana) DO NOTHING`).run(req.empleado.id, semana, JSON.stringify(r.semanas[0] || {}), huella, ip, String(req.body?.comentario || '').slice(0, 500) || null);
+  U.bitacora('empleado ' + req.empleado.numero, 'Conformidad de jornada', 'empleado', req.empleado.id, { semana, huella });
+  res.json({ ok: true });
+}));
+
 // ======================= Todo lo demás requiere sesión de administración =======================
 api.use(U.requireAdmin);
 const soloAdmin = U.requireRole('admin');
@@ -130,34 +155,39 @@ function crud(nombre, campos, { orden = 'id', listSql, soloAdminEscribe = true }
   api.post('/' + nombre, ...guard, wrap((req, res) => {
     const vals = campos.map((c) => nn(req.body[c]));
     const r = db.prepare(`INSERT INTO ${nombre} (${campos.join(',')}) VALUES (${campos.map(() => '?').join(',')})`).run(...vals);
+    U.bitacora(req.user.usuario, 'Alta', nombre, Number(r.lastInsertRowid), req.body);
     res.json({ id: Number(r.lastInsertRowid) });
   }));
   api.put('/' + nombre + '/:id', ...guard, wrap((req, res) => {
     const sets = campos.filter((c) => c in req.body);
     if (!sets.length) return res.json({ ok: true });
     db.prepare(`UPDATE ${nombre} SET ${sets.map((c) => c + '=?').join(',')} WHERE id = ?`).run(...sets.map((c) => nn(req.body[c])), Number(req.params.id));
+    U.bitacora(req.user.usuario, 'Cambio', nombre, req.params.id, Object.fromEntries(sets.map((c) => [c, req.body[c]])));
     res.json({ ok: true });
   }));
   api.delete('/' + nombre + '/:id', ...guard, wrap((req, res) => {
     db.prepare(`DELETE FROM ${nombre} WHERE id = ?`).run(Number(req.params.id));
+    U.bitacora(req.user.usuario, 'Eliminación', nombre, req.params.id);
     res.json({ ok: true });
   }));
 }
-crud('empresas', ['nombre'], { orden: 'nombre' });
+crud('empresas', ['nombre', 'razon_social', 'rfc', 'registro_patronal'], { orden: 'nombre' });
 crud('sedes', ['empresa_id', 'nombre', 'direccion', 'lat', 'lng', 'radio_m'], {
   listSql: 'SELECT s.*, e.nombre empresa FROM sedes s LEFT JOIN empresas e ON e.id = s.empresa_id ORDER BY s.nombre',
 });
 crud('horarios', ['nombre', 'entrada', 'salida', 'tolerancia_min', 'dias'], { orden: 'nombre' });
 
 // ---------- Empleados ----------
-const EMP = ['numero', 'nombre', 'puesto', 'empresa_id', 'sede_id', 'horario_id', 'tipo', 'activo'];
+const EMP = ['numero', 'nombre', 'puesto', 'empresa_id', 'sede_id', 'horario_id', 'tipo', 'activo', 'curp', 'rfc', 'nss'];
 api.get('/empleados', wrap((req, res) => {
   const emp = empresaForzada(req, req.query.empresa_id);
-  res.json(db.prepare(`SELECT e.id, e.numero, e.nombre, e.puesto, e.empresa_id, e.sede_id, e.horario_id, e.tipo, e.activo,
+  const arch = req.query.archivados === '1';
+  res.json(db.prepare(`SELECT e.id, e.numero, e.nombre, e.puesto, e.empresa_id, e.sede_id, e.horario_id, e.tipo, e.activo, e.curp, e.rfc, e.nss,
+                              e.odoo_id, e.fecha_baja, e.archivado, e.pin_checador IS NOT NULL tiene_pin_checador,
                               (e.pin_hash IS NOT NULL) tiene_pin, em.nombre empresa, s.nombre sede, h.nombre horario
                        FROM empleados e LEFT JOIN empresas em ON em.id=e.empresa_id
                        LEFT JOIN sedes s ON s.id=e.sede_id LEFT JOIN horarios h ON h.id=e.horario_id
-                       ${emp ? 'WHERE e.empresa_id = ?' : ''} ORDER BY e.nombre`).all(...(emp ? [Number(emp)] : [])));
+                       WHERE ${arch ? '1 = 1' : 'COALESCE(e.archivado, 0) = 0'} ${emp ? 'AND e.empresa_id = ?' : ''} ORDER BY e.nombre`).all(...(emp ? [Number(emp)] : [])));
 }));
 api.get('/empleados.csv', wrap((req, res) => {
   const emp = empresaForzada(req, req.query.empresa_id);
@@ -180,6 +210,7 @@ api.post('/empleados', soloAdmin, wrap((req, res) => {
   const r = db.prepare(`INSERT INTO empleados (${EMP.join(',')}, pin_hash) VALUES (${EMP.map(() => '?').join(',')}, ?)`)
     .run(...EMP.map((c) => (c === 'activo' ? (b.activo === 0 || b.activo === false ? 0 : 1) : c === 'tipo' ? b.tipo || 'oficina' : nn(b[c]))),
       b.pin ? U.hashPassword(b.pin) : null);
+  U.bitacora(req.user.usuario, 'Alta de empleado', 'empleado', Number(r.lastInsertRowid), { numero: b.numero, nombre: b.nombre });
   res.json({ id: Number(r.lastInsertRowid) });
 }));
 api.put('/empleados/:id', soloAdmin, wrap((req, res) => {
@@ -188,11 +219,15 @@ api.put('/empleados/:id', soloAdmin, wrap((req, res) => {
   const vals = sets.map((c) => (c === 'activo' ? (b.activo ? 1 : 0) : nn(b[c])));
   if (b.pin) { sets.push('pin_hash'); vals.push(U.hashPassword(b.pin)); }
   if (sets.length) db.prepare(`UPDATE empleados SET ${sets.map((c) => c + '=?').join(',')} WHERE id = ?`).run(...vals, Number(req.params.id));
+  if ('activo' in b && !b.activo) db.prepare("UPDATE empleados SET fecha_baja = COALESCE(fecha_baja, ?) WHERE id = ?").run(U.nowLocal().slice(0, 10), Number(req.params.id));
+  if ('activo' in b && b.activo) db.prepare('UPDATE empleados SET fecha_baja = NULL, archivado = 0 WHERE id = ?').run(Number(req.params.id));
+  U.bitacora(req.user.usuario, 'Cambio de empleado', 'empleado', req.params.id, { campos: sets.filter((c) => c !== 'pin_hash'), pin: !!b.pin });
   res.json({ ok: true });
 }));
 api.delete('/empleados/:id', soloAdmin, wrap((req, res) => {
-  // Se desactiva para conservar el historial de asistencia
-  db.prepare('UPDATE empleados SET activo = 0 WHERE id = ?').run(Number(req.params.id));
+  // Baja: se conserva el expediente y el historial de asistencia
+  db.prepare('UPDATE empleados SET activo = 0, fecha_baja = COALESCE(fecha_baja, ?) WHERE id = ?').run(U.nowLocal().slice(0, 10), Number(req.params.id));
+  U.bitacora(req.user.usuario, 'Baja de empleado', 'empleado', req.params.id);
   res.json({ ok: true });
 }));
 
@@ -240,23 +275,82 @@ api.delete('/dispositivos/:id', soloAdmin, wrap((req, res) => {
 
 // ---------- Odoo ----------
 api.get('/odoo', soloAdmin, wrap((req, res) => res.json(odooSync.getConfig())));
-api.put('/odoo', soloAdmin, wrap((req, res) => { odooSync.setConfig(req.body || {}); res.json(odooSync.getConfig()); }));
+api.put('/odoo', soloAdmin, wrap((req, res) => {
+  odooSync.setConfig(req.body || {});
+  const { odoo_api_key, ...sinClave } = req.body || {};
+  U.bitacora(req.user.usuario, 'Configuración de Odoo', 'odoo', null, { ...sinClave, api_key_cambiada: !!odoo_api_key });
+  res.json(odooSync.getConfig());
+}));
 api.post('/odoo/probar', soloAdmin, wrapAsync(async (req, res) => res.json(await odooSync.probar())));
 api.post('/odoo/sincronizar', soloAdmin, wrapAsync(async (req, res) => res.json(await odooSync.sincronizarTodo())));
-api.post('/odoo/vincular', soloAdmin, wrapAsync(async (req, res) => res.json(await odooSync.vincular(req.body.empleado_id, req.body.odoo_id))));
+api.post('/odoo/vincular', soloAdmin, wrapAsync(async (req, res) => {
+  const r = await odooSync.vincular(req.body.empleado_id, req.body.odoo_id);
+  U.bitacora(req.user.usuario, 'Vinculación con Odoo', 'empleado', req.body.empleado_id, { odoo_id: req.body.odoo_id });
+  res.json(r);
+}));
 
 // ---------- Huellas ----------
 api.get('/huellas/:dev', wrap((req, res) => res.json(huellas.listar(req.params.dev))));
 api.post('/huellas/:dev/escanear', soloAdmin, wrapAsync(async (req, res) => { const r = await huellas.escanear(req.params.dev); res.json({ ...r, ...huellas.listar(req.params.dev) }); }));
-api.post('/huellas/:dev/agregar', soloAdmin, wrapAsync(async (req, res) =>
-  res.json(await huellas.agregar(req.params.dev, req.body?.empleado_ids, req.user.usuario, { escribirPinOdoo: odooSync.escribirPin }))));
-api.post('/huellas/:dev/marcar', soloAdmin, wrap((req, res) => res.json(huellas.marcar(req.params.dev, req.body?.empleado_id, req.body?.estado, req.user.usuario))));
+api.post('/huellas/:dev/agregar', soloAdmin, wrapAsync(async (req, res) => {
+  const r = await huellas.agregar(req.params.dev, req.body?.empleado_ids, req.user.usuario, { escribirPinOdoo: odooSync.escribirPin });
+  U.bitacora(req.user.usuario, 'Alta en checador con PIN', 'dispositivo', req.params.dev, { empleados: r.hechos.map((h) => h.numero), errores: r.errores });
+  res.json(r);
+}));
+api.post('/huellas/:dev/marcar', soloAdmin, wrap((req, res) => {
+  const r = huellas.marcar(req.params.dev, req.body?.empleado_id, req.body?.estado, req.user.usuario);
+  U.bitacora(req.user.usuario, 'Estado de huella', 'empleado', req.body?.empleado_id, { dispositivo: req.params.dev, estado: req.body?.estado });
+  res.json(r);
+}));
+
+// ---------- Registro de jornada (formato para la autoridad) y bitácora ----------
+function paramsJornada(req) {
+  const hoy = U.nowLocal().slice(0, 10);
+  const desde = /^\d{4}-\d{2}-\d{2}$/.test(req.query.desde || '') ? req.query.desde : lunesDe(hoy);
+  let hasta = /^\d{4}-\d{2}-\d{2}$/.test(req.query.hasta || '') ? req.query.hasta : hoy;
+  if (hasta < desde) hasta = desde;
+  if ((new Date(hasta) - new Date(desde)) / 864e5 > 92) throw new Error('El periodo máximo es de 93 días');
+  return { desde, hasta, empresa_id: empresaForzada(req, req.query.empresa_id), empleado_id: nn(req.query.empleado_id) };
+}
+api.get('/jornada', wrap((req, res) => res.json(registroJornada(paramsJornada(req)))));
+api.get('/jornada.csv', wrap((req, res) => {
+  const p = paramsJornada(req);
+  const r = registroJornada(p);
+  const sem = new Map(r.semanas.map((w) => [w.empleado_id + '|' + w.semana, w]));
+  const rows = r.dias.map((d) => {
+    const w = sem.get(d.empleado_id + '|' + d.semana) || {};
+    return { ...d, pares_txt: d.pares.map((x) => `${x[0] || '?'}-${x[1] || '?'}`).join(' / '), descanso: (d.descanso_min / 60).toFixed(2),
+      inc: d.incidencias.join('; '), horas_semana: w.horas, limite: w.limite, conformidad: w.conformidad || 'Pendiente' };
+  });
+  U.bitacora(req.user.usuario, 'Exportación de registro de jornada', null, null, p);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="registro_jornada_${p.desde}_${p.hasta}.csv"`);
+  res.send(U.toCSV([
+    { key: 'empresa', label: 'Empresa' }, { key: 'numero', label: 'No. empleado' }, { key: 'nombre', label: 'Nombre' }, { key: 'puesto', label: 'Puesto' },
+    { key: 'curp', label: 'CURP' }, { key: 'rfc', label: 'RFC' }, { key: 'fecha', label: 'Fecha' }, { key: 'entrada', label: 'Inicio de jornada' },
+    { key: 'salida', label: 'Fin de jornada' }, { key: 'pares_txt', label: 'Entradas y salidas' }, { key: 'descanso', label: 'Descanso (h)' },
+    { key: 'efectivas', label: 'Horas efectivas' }, { key: 'extra', label: 'Horas extra' }, { key: 'medio', label: 'Medio de registro' },
+    { key: 'estado', label: 'Estado' }, { key: 'inc', label: 'Incidencias' }, { key: 'horas_semana', label: 'Horas en la semana' },
+    { key: 'limite', label: 'Jornada máxima semanal' }, { key: 'conformidad', label: 'Conformidad del trabajador' },
+  ], rows));
+}));
+api.get('/bitacora', soloAdmin, wrap((req, res) => {
+  const q = req.query, where = [], p = [];
+  if (q.desde) { where.push('fecha >= ?'); p.push(q.desde + ' 00:00:00'); }
+  if (q.hasta) { where.push('fecha <= ?'); p.push(q.hasta + ' 23:59:59'); }
+  if (q.buscar) { where.push('(usuario LIKE ? OR accion LIKE ? OR detalle LIKE ? OR entidad_id LIKE ?)'); p.push(...Array(4).fill(`%${q.buscar}%`)); }
+  const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  res.json({ total: db.prepare(`SELECT COUNT(*) c FROM bitacora ${w}`).get(...p).c,
+    rows: db.prepare(`SELECT * FROM bitacora ${w} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...p, Math.min(Number(q.limit) || 100, 500), Number(q.offset) || 0) });
+}));
 
 // ---------- Depuración ----------
 api.post('/depurar/vista-previa', soloAdmin, wrapAsync(async (req, res) => res.json(await depurar.vistaPrevia(req.body || {}))));
 api.post('/depurar/aplicar', soloAdmin, wrapAsync(async (req, res) => {
   if (req.body?.confirmacion !== 'DEPURAR') throw new Error('Falta la confirmación');
-  res.json(await depurar.aplicar(req.body));
+  const r = await depurar.aplicar(req.body);
+  U.bitacora(req.user.usuario, 'Depuración', null, null, { desde: req.body.desde, dias: req.body.dias, ...r });
+  res.json(r);
 }));
 api.get('/depurar/ultima', soloAdmin, wrap((req, res) => {
   const v = db.prepare("SELECT valor FROM ajustes WHERE clave IN ('ultima_depuracion','asistencia_desde') ORDER BY clave").all();
@@ -309,6 +403,7 @@ function filtroRegistros(req) {
   if (q.dispositivo_id) { where.push('r.dispositivo_id = ?'); p.push(Number(q.dispositivo_id)); }
   if (q.fuera === '1') where.push('r.dentro_geocerca = 0');
   if (q.sin_empleado === '1') where.push('e.id IS NULL');
+  if (q.anulados !== '1') where.push('r.anulado = 0');
   const emp = empresaForzada(req, q.empresa_id);
   if (emp) { where.push('e.empresa_id = ?'); p.push(Number(emp)); }
   if (q.buscar) { where.push('(e.nombre LIKE ? OR r.empleado_numero LIKE ?)'); p.push(`%${q.buscar}%`, `%${q.buscar}%`); }
@@ -343,16 +438,24 @@ api.post('/registros', wrap((req, res) => {
   const fh = U.normalizeDateTime(b.fecha_hora);
   if (!b.empleado_numero || !fh) return res.status(400).json({ error: 'Empleado y fecha/hora son obligatorios' });
   if (!b.nota || !String(b.nota).trim()) return res.status(400).json({ error: 'Indica el motivo del registro manual' });
-  const desdeMin = U.asistenciaDesde();
-  if (desdeMin && fh < desdeMin + ' 00:00:00') return res.status(400).json({ error: `Sólo se aceptan checadas desde el ${desdeMin} (ver Depuración)` });
   const e = db.prepare('SELECT empresa_id FROM empleados WHERE numero = ?').get(String(b.empleado_numero));
   if (!e) return res.status(400).json({ error: 'El empleado no existe' });
   if (req.user.empresa_id && e.empresa_id !== req.user.empresa_id) return res.status(403).json({ error: 'Sin permiso sobre este empleado' });
   const n = U.guardarRegistro({ empleado_numero: b.empleado_numero, fecha_hora: fh, tipo: nn(b.tipo), origen: 'manual', nota: b.nota, creado_por: req.user.usuario });
-  res.json({ ok: true, nuevos: n });
+  const desdeMin = U.asistenciaDesde();
+  const archivo = desdeMin && fh < desdeMin + ' 00:00:00';
+  U.bitacora(req.user.usuario, 'Registro manual', 'registro', b.empleado_numero, { fecha_hora: fh, tipo: nn(b.tipo), motivo: b.nota, archivo: !!archivo });
+  res.json({ ok: true, nuevos: n, archivo: !!archivo });
 }));
-api.delete('/registros/:id', soloAdmin, wrap((req, res) => {
-  db.prepare('DELETE FROM registros WHERE id = ?').run(Number(req.params.id));
+// Las checadas no se borran (obligación de conservarlas): se anulan con motivo y quedan en la bitácora.
+api.post('/registros/:id/anular', soloAdmin, wrap((req, res) => {
+  const motivo = String(req.body?.motivo || '').trim();
+  if (motivo.length < 5) return res.status(400).json({ error: 'Indica el motivo de la anulación' });
+  const r = db.prepare('SELECT * FROM registros WHERE id = ?').get(Number(req.params.id));
+  if (!r) return res.status(404).json({ error: 'Registro no encontrado' });
+  if (r.anulado) return res.status(400).json({ error: 'El registro ya estaba anulado' });
+  db.prepare('UPDATE registros SET anulado = 1, anulado_por = ?, anulado_motivo = ?, anulado_en = ? WHERE id = ?').run(req.user.usuario, motivo, U.nowLocal(), r.id);
+  U.bitacora(req.user.usuario, 'Anulación de checada', 'registro', r.id, { empleado: r.empleado_numero, fecha_hora: r.fecha_hora, origen: r.origen, motivo });
   res.json({ ok: true });
 }));
 
@@ -366,6 +469,7 @@ api.post('/importar', soloAdmin, wrap((req, res) => {
     try {
       for (const x of r.registros) nuevos += U.guardarRegistro({ ...x, origen: 'importacion', creado_por: req.user.usuario });
       db.exec('COMMIT');
+      U.bitacora(req.user.usuario, 'Importación de checadas', 'registro', null, { total: r.registros.length, nuevos });
     } catch (e) { db.exec('ROLLBACK'); throw e; }
   }
   const numeros = [...new Set(r.registros.map((x) => x.empleado_numero))];
@@ -424,7 +528,7 @@ api.get('/dashboard', wrap((req, res) => {
     if (f.estado === 'Falta') x.faltas++;
   }
   const ultimos = db.prepare(`SELECT r.fecha_hora, r.tipo, r.origen, r.empleado_numero, r.dentro_geocerca, e.nombre empleado, d.nombre dispositivo
-                              ${SQL_REG} ${empresa_id ? 'WHERE e.empresa_id = ?' : ''} ORDER BY r.id DESC LIMIT 12`).all(...(empresa_id ? [Number(empresa_id)] : []));
+                              ${SQL_REG} WHERE r.anulado = 0 ${empresa_id ? 'AND e.empresa_id = ?' : ''} ORDER BY r.id DESC LIMIT 12`).all(...(empresa_id ? [Number(empresa_id)] : []));
   const dispositivos = db.prepare('SELECT id, nombre, marca, estado, ultimo_contacto FROM dispositivos ORDER BY nombre').all();
   const sinEmpleado = db.prepare(`SELECT COUNT(DISTINCT r.empleado_numero) c FROM registros r LEFT JOIN empleados e ON e.numero = r.empleado_numero
                                   WHERE e.id IS NULL AND r.fecha_hora >= date('now','-30 day')`).get().c;

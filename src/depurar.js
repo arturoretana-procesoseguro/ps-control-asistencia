@@ -1,6 +1,10 @@
 'use strict';
 /**
- * Depuración: deja sólo a los empleados activos y descarta checadas viejas.
+ * Depuración: deja sólo a los empleados activos y saca de la operación diaria las checadas viejas.
+ * Por obligación legal (LFT art. 804 y art. 132 fr. XXXIV) NADA se borra del sistema:
+ *  - las checadas anteriores a la fecha elegida pasan al archivo histórico;
+ *  - los empleados que salen quedan dados de baja y archivados (con su historial).
+ * Del checador físico sí se borran los usuarios (el registro legal es el del sistema).
  *  - Se conservan: empleados vinculados con Odoo y activos.
  *  - Se eliminan: archivados en Odoo, duplicados de 12 dígitos, y los que no están en Odoo y no checan desde hace N días.
  *  - A revisar (no se tocan): no están en Odoo pero sí checaron en los últimos N días.
@@ -20,7 +24,7 @@ const setAjuste = (k, v) => db.prepare('INSERT INTO ajustes (clave, valor) VALUE
 const clave = (n) => String(n ?? '').trim().replace(/^0+(?=\d)/, '').toUpperCase();
 
 function ultimaChecada() {
-  return new Map(db.prepare('SELECT empleado_numero n, MAX(fecha_hora) u FROM registros GROUP BY empleado_numero').all().map((r) => [clave(r.n), r.u]));
+  return new Map(db.prepare('SELECT empleado_numero n, MAX(fecha_hora) u FROM registros WHERE anulado = 0 GROUP BY empleado_numero').all().map((r) => [clave(r.n), r.u]));
 }
 
 async function vistaPrevia({ dias = 30, desde, leerChecadores = true } = {}) {
@@ -32,7 +36,7 @@ async function vistaPrevia({ dias = 30, desde, leerChecadores = true } = {}) {
   const ult = ultimaChecada();
 
   const conservar = [], eliminar = [], revisar = [];
-  for (const e of db.prepare('SELECT id, numero, nombre, odoo_id, activo FROM empleados ORDER BY nombre').all()) {
+  for (const e of db.prepare('SELECT id, numero, nombre, odoo_id, activo FROM empleados WHERE COALESCE(archivado, 0) = 0 ORDER BY nombre').all()) {
     const u = ult.get(clave(e.numero)) || null;
     const x = { id: e.id, numero: e.numero, nombre: e.nombre, ultima: u };
     if (e.odoo_id && e.activo) conservar.push(x);
@@ -92,20 +96,22 @@ async function aplicar({ dias, desde, borrar_en_checador = true, vaciar_memoria 
     }
   }
 
-  // 3. Base de datos: fecha mínima, checadas viejas y empleados eliminados
+  // 3. Base de datos: fecha de corte, checadas viejas al archivo y bajas archivadas (nada se borra)
   setAjuste('asistencia_desde', p.desde);
+  const COLS = 'empleado_numero, fecha_hora, tipo, origen, dispositivo_id, lat, lng, precision_m, distancia_m, dentro_geocerca, foto, nota, creado_por, creado_en, anulado, anulado_por, anulado_motivo, anulado_en';
+  const archivar = (where, params) => {
+    db.prepare(`INSERT OR IGNORE INTO registros_archivo (${COLS}) SELECT ${COLS} FROM registros WHERE ${where}`).run(...params);
+    return Number(db.prepare(`DELETE FROM registros WHERE ${where}`).run(...params).changes);
+  };
+  const hoy = nowLocal().slice(0, 10);
   db.exec('BEGIN');
   try {
-    res.checadas_borradas = Number(db.prepare('DELETE FROM registros WHERE fecha_hora < ?').run(p.desde + ' 00:00:00').changes);
-    db.prepare('DELETE FROM odoo_asistencias WHERE fecha < ?').run(p.desde);
-    let borradasEmp = 0;
+    res.checadas_archivadas = archivar('fecha_hora < ?', [p.desde + ' 00:00:00']);
     for (const e of p.eliminar) {
-      borradasEmp += Number(db.prepare('DELETE FROM registros WHERE empleado_numero = ?').run(e.numero).changes);
-      db.prepare('DELETE FROM odoo_asistencias WHERE empleado_id = ?').run(e.id);
-      db.prepare('DELETE FROM empleados WHERE id = ?').run(e.id);
+      res.checadas_archivadas += archivar('empleado_numero = ?', [e.numero]);
+      db.prepare('UPDATE empleados SET activo = 0, archivado = 1, fecha_baja = COALESCE(fecha_baja, ?) WHERE id = ?').run(hoy, e.id);
     }
-    res.checadas_borradas += borradasEmp;
-    res.empleados_eliminados = p.eliminar.length;
+    res.empleados_archivados = p.eliminar.length;
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }
 
@@ -126,7 +132,7 @@ async function aplicar({ dias, desde, borrar_en_checador = true, vaciar_memoria 
   }
   res.fecha = nowLocal();
   setAjuste('ultima_depuracion', JSON.stringify(res));
-  console.log(`[Depuración] ${res.empleados_eliminados} empleados y ${res.checadas_borradas} checadas eliminados. Respaldo: ${respaldo}`);
+  console.log(`[Depuración] ${res.empleados_archivados} empleados dados de baja y ${res.checadas_archivadas} checadas archivadas. Respaldo: ${respaldo}`);
   return res;
 }
 

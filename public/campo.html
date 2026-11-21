@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0a2c4d">
-  <title>Checador de Campo · Proceso Seguro</title>
+  <title>Mi asistencia · Proceso Seguro</title>
   <link rel="stylesheet" href="/styles.css">
   <style>
     body { background: var(--bg); }
@@ -29,7 +29,7 @@
       <label class="f">PIN<input type="password" name="pin" inputmode="numeric" autocomplete="current-password" required></label>
       <div class="err-msg" id="login-err"></div>
       <button class="btn primary" style="justify-content:center;padding:12px;font-size:16px">Entrar</button>
-      <p class="small muted" style="margin:0">Tu sesión queda guardada en este teléfono por 30 días. Si no tienes PIN, solicítalo a Recursos Humanos.</p>
+      <p class="small muted" style="margin:0">Personal de campo: registra aquí tu asistencia. Personal de oficina: consulta y confirma tu jornada con el PIN que te dio Recursos Humanos. Tu sesión queda guardada en este teléfono por 30 días.</p>
     </form>
   </section>
 
@@ -43,6 +43,7 @@
       <div style="font-size:13px;opacity:.85" id="fecha"></div>
     </div>
 
+    <div id="solo-campo" style="display:flex;flex-direction:column;gap:14px">
     <div class="card">
       <div class="status" id="gps"><span class="dot warn"></span>Obteniendo ubicación…</div>
       <div class="muted small" id="geo" style="margin-top:6px"></div>
@@ -62,8 +63,18 @@
       <button class="out" id="b-out" disabled>Salida</button>
     </div>
     <div id="msg" class="small" style="min-height:20px;text-align:center"></div>
+    </div>
 
     <div class="card"><h3>Mis registros de hoy</h3><div id="hoy" class="small muted">Sin registros</div></div>
+
+    <div class="card" id="semana-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <button class="btn sm" id="sem-prev" aria-label="Semana anterior">‹</button>
+        <div style="text-align:center"><h3 style="margin:0">Mi jornada</h3><div class="small muted" id="sem-lbl"></div></div>
+        <button class="btn sm" id="sem-next" aria-label="Semana siguiente">›</button>
+      </div>
+      <div id="sem-body" class="small" style="margin-top:10px"></div>
+    </div>
   </section>
 </div>
 <script>
@@ -112,9 +123,37 @@ async function load() {
   $('#v-login').classList.add('hidden'); $('#v-main').classList.remove('hidden');
   const e = me.empleado;
   $('#nombre').textContent = e.nombre;
+  const esCampo = e.tipo !== 'oficina';
+  $('#solo-campo').classList.toggle('hidden', !esCampo);
+  semana = null; cargarSemana();
   $('#sub').textContent = [e.numero, e.empresa, e.h_entrada ? `Horario ${e.h_entrada}–${e.h_salida}` : ''].filter(Boolean).join(' · ');
-  renderHoy(); startGPS();
+  renderHoy(); if (esCampo) startGPS();
 }
+let semana = null;
+const hm = (h) => { const n = Number(h || 0); return n ? `${Math.floor(n)}:${String(Math.round((n % 1) * 60)).padStart(2, '0')} h` : '—'; };
+async function cargarSemana(delta = 0) {
+  if (semana && delta) { const d = new Date(semana + 'T12:00:00'); d.setDate(d.getDate() + 7 * delta); semana = d.toISOString().slice(0, 10); }
+  const r = await api('/semana' + (semana ? '?semana=' + semana : ''));
+  semana = r.semana;
+  $('#sem-lbl').textContent = `Del ${r.semana} al ${r.fin}`;
+  const t = r.total;
+  const dias = r.dias.filter((d) => d.pares.length || d.estado === 'Falta');
+  $('#sem-body').innerHTML = (dias.length ? dias.map((d) => `<div class="list-row"><div><b>${new Date(d.fecha + 'T12:00:00').toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' })}</b>
+      <div class="muted">${d.pares.map((x) => `${x[0] || '¿?'}–${x[1] || '¿?'}`).join(' · ') || esc(d.estado)}${d.descanso_min ? ` · descanso ${d.descanso_min} min` : ''}</div></div>
+      <div style="text-align:right"><b>${hm(d.efectivas)}</b>${d.extra ? `<div class="muted">extra ${hm(d.extra)}</div>` : ''}</div></div>`).join('') : '<div class="muted">Sin registros esta semana.</div>')
+    + (t ? `<div class="list-row" style="font-size:14px"><b>Total de la semana</b><b>${hm(t.horas)} <span class="muted" style="font-weight:400">de ${t.limite} h máx.</span></b></div>` : '')
+    + (r.conformidad ? `<div class="help" style="margin-top:10px">✔ Confirmaste esta semana el ${esc(r.conformidad.fecha)}.</div>`
+      : r.cerrada && dias.length ? `<div style="margin-top:12px"><textarea id="conf-com" rows="2" maxlength="500" placeholder="Comentario (opcional): si algo no es correcto, explícalo aquí" style="width:100%"></textarea>
+          <button class="btn primary" id="conf-btn" style="width:100%;justify-content:center;margin-top:8px;padding:12px">Confirmo que mi registro de esta semana es correcto</button></div>`
+      : !r.cerrada ? '<div class="muted" style="margin-top:8px">Podrás confirmar esta semana cuando termine.</div>' : '');
+  $('#sem-next').disabled = !r.cerrada;
+  $('#conf-btn')?.addEventListener('click', async () => {
+    try { await api('/conformidad', { semana: r.semana, comentario: $('#conf-com').value }); cargarSemana(); }
+    catch (e) { alert(e.message); }
+  });
+}
+$('#sem-prev').onclick = () => cargarSemana(-1);
+$('#sem-next').onclick = () => cargarSemana(1);
 function tick() {
   const n = new Date();
   $('#clock').textContent = n.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' });

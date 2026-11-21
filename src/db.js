@@ -115,6 +115,51 @@ db.exec(`CREATE TABLE IF NOT EXISTS odoo_asistencias (
   PRIMARY KEY (empleado_id, fecha)
 )`);
 
+// ---- cumplimiento (LFT art. 132 fr. XXXIV y art. 804): conservar, anular en vez de borrar, bitácora ----
+addColumn('registros', 'anulado', 'INTEGER DEFAULT 0');
+addColumn('registros', 'anulado_por', 'TEXT');
+addColumn('registros', 'anulado_motivo', 'TEXT');
+addColumn('registros', 'anulado_en', 'TEXT');
+addColumn('empleados', 'fecha_baja', 'TEXT');
+addColumn('empleados', 'archivado', 'INTEGER DEFAULT 0');
+addColumn('empleados', 'curp', 'TEXT');
+addColumn('empleados', 'rfc', 'TEXT');
+addColumn('empleados', 'nss', 'TEXT');
+addColumn('empresas', 'razon_social', 'TEXT');
+addColumn('empresas', 'rfc', 'TEXT');
+addColumn('empresas', 'registro_patronal', 'TEXT');
+db.exec(`
+CREATE TABLE IF NOT EXISTS registros_archivo (
+  id INTEGER PRIMARY KEY,
+  empleado_numero TEXT NOT NULL, fecha_hora TEXT NOT NULL, tipo TEXT, origen TEXT NOT NULL,
+  dispositivo_id INTEGER, lat REAL, lng REAL, precision_m REAL, distancia_m REAL, dentro_geocerca INTEGER,
+  foto TEXT, nota TEXT, creado_por TEXT, creado_en TEXT,
+  anulado INTEGER DEFAULT 0, anulado_por TEXT, anulado_motivo TEXT, anulado_en TEXT,
+  archivado_en TEXT DEFAULT (datetime('now','localtime')),
+  UNIQUE (empleado_numero, fecha_hora, origen)
+);
+CREATE INDEX IF NOT EXISTS idx_archivo_emp ON registros_archivo(empleado_numero, fecha_hora);
+CREATE TABLE IF NOT EXISTS bitacora (
+  id INTEGER PRIMARY KEY,
+  fecha TEXT DEFAULT (datetime('now','localtime')),
+  usuario TEXT, accion TEXT NOT NULL, entidad TEXT, entidad_id TEXT, detalle TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_bitacora_fecha ON bitacora(fecha);
+CREATE TRIGGER IF NOT EXISTS bitacora_sin_cambios BEFORE UPDATE ON bitacora BEGIN SELECT RAISE(ABORT, 'La bitácora no se puede modificar'); END;
+CREATE TRIGGER IF NOT EXISTS bitacora_sin_borrar BEFORE DELETE ON bitacora BEGIN SELECT RAISE(ABORT, 'La bitácora no se puede borrar'); END;
+CREATE TABLE IF NOT EXISTS conformidades (
+  id INTEGER PRIMARY KEY,
+  empleado_id INTEGER NOT NULL REFERENCES empleados(id),
+  semana TEXT NOT NULL,            -- lunes de la semana YYYY-MM-DD
+  resumen TEXT,                    -- horas y días confirmados (JSON)
+  huella TEXT,                     -- hash del detalle confirmado
+  fecha TEXT DEFAULT (datetime('now','localtime')),
+  ip TEXT,
+  comentario TEXT,
+  UNIQUE (empleado_id, semana)
+);
+`);
+
 function seed(hashPassword) {
   const count = db.prepare('SELECT COUNT(*) c FROM empresas').get().c;
   if (count === 0) {
