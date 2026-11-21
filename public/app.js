@@ -1091,7 +1091,10 @@ const copiloto = (() => {
     return `<div class="msg ia"><div class="motor ${r.motor === 'claude' ? 'claude' : ''}"><i></i>${r.motor === 'claude' ? 'Claude' : 'Motor local'}</div>
       ${md(m.texto)}
       ${r.tabla ? `<div class="tbl"><table><thead><tr>${r.tabla.columnas.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${r.tabla.filas.map((f) => `<tr>${f.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : ''}
-      ${(r.acciones || []).length ? `<div class="acc">${r.acciones.map((a) => a.emp ? `<button class="btn sm" data-emp="${a.emp}">${esc(a.label)}</button>` : `<a class="btn sm" href="${esc(a.href)}">${esc(a.label)}</a>`).join('')}</div>` : ''}
+      ${(r.archivos || []).length ? `<div class="acc">${r.archivos.map((a) => `<a class="btn sm primary" href="/api/archivos/${esc(a.id)}?n=${encodeURIComponent(a.nombre)}" download>⬇ ${esc(a.nombre)}</a>`).join('')}</div>
+        <div class="small muted" style="margin-top:4px">${r.archivos.map((a) => a.hojas.map((h) => `${esc(h.nombre)}: ${h.filas} filas`).join(' · ')).join(' | ')}</div>` : ''}
+      ${(r.acciones || []).length || (r.tabla && !(r.archivos || []).length) ? `<div class="acc">${(r.acciones || []).map((a) => a.emp ? `<button class="btn sm" data-emp="${a.emp}">${esc(a.label)}</button>` : `<a class="btn sm" href="${esc(a.href)}">${esc(a.label)}</a>`).join('')}
+        ${r.tabla && !(r.archivos || []).length ? `<button class="btn sm" data-xls="${hist.indexOf(m)}">⬇ Excel</button>` : ''}</div>` : ''}
       ${r.aviso ? `<div class="aviso">⚠ ${esc(r.aviso)}</div>` : ''}</div>
       ${(r.sugerencias || []).length && m === hist[hist.length - 1] ? `<div class="sug">${r.sugerencias.map((s) => `<button type="button" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div>` : ''}`;
   };
@@ -1099,10 +1102,19 @@ const copiloto = (() => {
     const box = $('#cp-msgs');
     box.innerHTML = (hist.length ? hist.map(pintarMsg).join('') : `<div class="msg ia"><div class="motor"><i></i>Copiloto</div>
       <div>Hola${state.me?.nombre ? ', <b>' + esc(state.me.nombre.split(' ')[0]) + '</b>' : ''} 👋 Pregúntame lo que quieras saber de la asistencia: faltas, retardos, horas, una persona en particular o el límite legal de horas.</div></div>
-      <div class="sug">${['¿Quién faltó hoy?', '¿Quién llegó tarde esta semana?', '¿Quién tiene más retardos este mes?', 'Horas extra de la semana pasada', 'Huellas pendientes'].map((s) => `<button type="button" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div>`)
+      <div class="sug">${['¿Quién faltó hoy?', '¿Quién llegó tarde esta semana?', '¿Quién tiene más retardos este mes?', 'Exporta a Excel los retardos de este mes', 'Huellas pendientes'].map((s) => `<button type="button" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div>`)
       + (pensando ? '<div class="msg ia"><div class="typing"><span></span><span></span><span></span></div></div>' : '');
     box.scrollTop = box.scrollHeight;
     box.querySelectorAll('[data-q]').forEach((b) => b.onclick = () => preguntar(b.dataset.q));
+    box.querySelectorAll('[data-xls]').forEach((b) => b.onclick = async () => {
+      const m = hist[Number(b.dataset.xls)]; const prev = hist[Number(b.dataset.xls) - 1];
+      b.disabled = true; b.textContent = 'Generando…';
+      try {
+        const a = await api('/excel/tabla', { method: 'POST', body: { titulo: (prev?.texto || 'Reporte del copiloto').replace(/[¿?]/g, '').slice(0, 60), ...m.r.tabla } });
+        m.r.archivos = [a]; guardar(); pintar();
+        const l = document.createElement('a'); l.href = `/api/archivos/${a.id}?n=${encodeURIComponent(a.nombre)}`; l.download = a.nombre; l.click();
+      } catch (e) { toast(e.message, true); b.disabled = false; b.textContent = '⬇ Excel'; }
+    });
   };
   async function preguntar(q) {
     q = String(q || '').trim(); if (!q) return;

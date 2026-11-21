@@ -321,7 +321,14 @@ api.delete('/festivos/:id', soloAdmin, wrap((req, res) => {
 // ---------- Asistente (IA) ----------
 api.post('/asistente', wrapAsync(async (req, res) => {
   const b = req.body || {};
-  res.json(await asistente.responder(b.pregunta, Array.isArray(b.historial) ? b.historial : [], { empresaForzada: req.user.empresa_id || null, motor: b.motor }));
+  res.json(await asistente.responder(b.pregunta, Array.isArray(b.historial) ? b.historial : [], { empresaForzada: req.user.empresa_id || null, motor: b.motor, usuario: req.user.usuario }));
+}));
+api.post('/excel/tabla', wrapAsync(async (req, res) => res.json(await asistente.excelDeTabla(req.body || {}, req.user.usuario))));
+api.get('/archivos/:id', wrap((req, res) => {
+  const p = require('./excel').ruta(req.params.id);
+  if (!p) return res.status(404).json({ error: 'El archivo ya no existe (se conservan 24 horas). Vuelve a pedirlo.' });
+  const nombre = String(req.query.n || 'reporte.xlsx').replace(/[^\w.\-]/g, '_');
+  res.download(p, nombre.endsWith('.xlsx') ? nombre : nombre + '.xlsx');
 }));
 api.get('/asistente/hallazgos', wrap((req, res) => res.json({ hallazgos: asistente.hallazgos({ empresaForzada: req.user.empresa_id || null }), ia: asistente.configIA() })));
 api.get('/ia', soloAdmin, wrap((req, res) => res.json(asistente.configIA())));

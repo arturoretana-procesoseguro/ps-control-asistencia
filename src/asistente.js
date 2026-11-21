@@ -279,6 +279,42 @@ function hallazgos({ empresaForzada } = {}) {
   return out.slice(0, 5);
 }
 
+// ====================== Excel ======================
+async function generarExcel({ titulo, hojas }, { empresaForzada, usuario } = {}) {
+  const X = require('./excel');
+  const out = [];
+  for (const h of (hojas || []).slice(0, 10)) {
+    const emp = empresaForzada || h.empresa_id || null;
+    for (const k of ['desde', 'hasta']) if (h[k] && !/^\d{4}-\d{2}-\d{2}$/.test(h[k])) throw new Error(`${k} debe tener formato YYYY-MM-DD`);
+    let filas;
+    if (h.tipo === 'dias') filas = datos.dias({ desde: h.desde, hasta: h.hasta, empresa_id: emp, empleado_id: h.empleado_id, estado: h.estado, limite: 50000 });
+    else if (h.tipo === 'agrupado') filas = datos.agrupado({ desde: h.desde, hasta: h.hasta, agrupar: h.agrupar || 'empleado', empresa_id: emp, empleado_id: h.empleado_id });
+    else if (h.tipo === 'semanas') filas = datos.semanas({ desde: h.desde, hasta: h.hasta, empresa_id: emp, empleado_id: h.empleado_id });
+    else if (h.tipo === 'huellas') filas = datos.huellas_pendientes(emp);
+    else if (h.tipo === 'nunca_checado') filas = sinRegistros(emp);
+    else throw new Error('Tipo de hoja desconocido: ' + h.tipo);
+    let cols = X.COLUMNAS[h.tipo];
+    if (Array.isArray(h.columnas) && h.columnas.length) { const m = new Map(cols.map((c) => [c[0], c])); const sel = h.columnas.map((c) => m.get(c)).filter(Boolean); if (sel.length) cols = sel; }
+    if (h.tipo === 'agrupado') cols = cols.map((c) => (c[0] === 'grupo' ? ['grupo', { empleado: 'Empleado', empresa: 'Empresa', sede: 'Sede', puesto: 'Puesto', tipo: 'Tipo', dia: 'Día', semana: 'Semana', mes: 'Mes', dia_semana: 'Día de la semana' }[h.agrupar || 'empleado'], 'texto'] : c));
+    out.push({ nombre: h.nombre, subtitulo: h.desde ? `Del ${h.desde} al ${h.hasta}` : '', columnas: cols, filas: X.normalizarFilas(h.tipo, filas) });
+  }
+  if (!out.length) throw new Error('El reporte no tiene hojas');
+  const a = await X.guardar({ titulo, usuario, hojas: out });
+  bitacora(usuario, 'Reporte Excel del copiloto', 'reporte', a.id, { titulo, hojas: a.hojas });
+  return a;
+}
+/** Convierte la tabla de una respuesta en Excel (motor local y botón ⬇ Excel). */
+async function excelDeTabla({ titulo, columnas, filas }, usuario) {
+  const X = require('./excel');
+  const cols = (columnas || []).map((c, i) => [String(i), String(c), 'texto']);
+  const fs2 = (filas || []).slice(0, 50000).map((f) => Object.fromEntries((f || []).map((v, i) => {
+    const s2 = String(v ?? ''); const num = /^-?\d+(\.\d+)?$/.test(s2) ? Number(s2) : null;
+    if (num != null) cols[i] && (cols[i][2] = cols[i][2] === 'texto' ? 'numero' : cols[i][2]);
+    return [String(i), num != null ? num : s2];
+  })));
+  return X.guardar({ titulo: titulo || 'Reporte del copiloto', usuario, hojas: [{ nombre: 'Reporte', columnas: cols, filas: fs2 }] });
+}
+
 // ====================== Motor Claude ======================
 function configIA() {
   return { activo: getAjuste('ia_activo') === '1', tiene_api_key: !!getAjuste('ia_api_key'), modelo: getAjuste('ia_modelo') || 'claude-opus-5-5' };
@@ -295,9 +331,10 @@ function setConfigIA(b, usuario) {
 const SISTEMA = `Eres el asistente de control de asistencia de Grupo Proceso Seguro (México). Respondes en español, de forma breve y clara, a personal de Recursos Humanos.
 Usa SIEMPRE las herramientas para obtener datos; nunca inventes nombres, cifras ni fechas. Si una pregunta es ambigua (por ejemplo, hay varias personas con el mismo nombre), dilo y pide que precise.
 Las fechas van en formato YYYY-MM-DD y la zona horaria es la de la Ciudad de México. Los días de descanso obligatorio (LFT art. 74) aparecen con estado "Festivo" (no son faltas) o "Festivo trabajado" (art. 75: se paga salario doble adicional). Las horas efectivas excluyen el tiempo de comida. La jornada máxima semanal legal es 48 h en 2026, 46 h en 2027, 44 h en 2028, 42 h en 2029 y 40 h desde 2030.
-Cuando listes varias personas o días, usa una tabla en Markdown. No des consejos legales definitivos; sugiere revisar con el área legal cuando aplique.`;
+Cuando listes varias personas o días, usa una tabla en Markdown (máximo unas 20 filas; si son más, ofrece o genera un Excel con crear_excel). Si piden un reporte, Excel o descarga, usa crear_excel. No des consejos legales definitivos; sugiere revisar con el área legal cuando aplique.`;
 
-async function responderClaude(pregunta, historial, { empresaForzada } = {}) {
+async function responderClaude(pregunta, historial, opts2 = {}) {
+  const { empresaForzada } = opts2;
   const Anthropic = (() => { const m = require('@anthropic-ai/sdk'); return m.default || m; })();
   const { betaTool } = require('@anthropic-ai/sdk/helpers/beta/json-schema');
   const cfg = configIA();
@@ -307,6 +344,7 @@ async function responderClaude(pregunta, historial, { empresaForzada } = {}) {
   const emp = (id) => (empresaForzada || id || null);
   const json = (x) => JSON.stringify(x);
   const usadas = [];
+  const archivos = [];
   const validarFechas = (i) => { for (const k of ['desde', 'hasta']) if (k in i && !/^\d{4}-\d{2}-\d{2}$/.test(String(i[k]))) throw new Error(`${k} debe tener formato YYYY-MM-DD`); };
   const herramienta = (def) => betaTool({ ...def, strict: true, run: async (input) => { usadas.push(def.name); try { validarFechas(input); return json(await def.run2(input)); } catch (e) { return json({ error: e.message }); } } });
   const tools = [
@@ -326,6 +364,21 @@ async function responderClaude(pregunta, historial, { empresaForzada } = {}) {
     herramienta({ name: 'jornada_semanal', description: 'Horas efectivas por empleado y semana contra la jornada máxima legal, horas extra y si el trabajador confirmó su registro.',
       inputSchema: { type: 'object', properties: { desde: fecha, hasta: fecha, empresa_id: idOpc('Id de la empresa (listar_empresas) o null para todas'), empleado_id: idOpc('Id del empleado (buscar_empleado) o null para todos') }, required: ['desde', 'hasta', 'empresa_id', 'empleado_id'], additionalProperties: false },
       run2: (i) => datos.semanas({ ...i, empresa_id: emp(i.empresa_id) }) }),
+    herramienta({ name: 'crear_excel', description: 'Genera un archivo de Excel (.xlsx) descargable con una o varias hojas. Cada hoja es una consulta que el sistema ejecuta directo en la base de datos (los datos no pasan por ti): '
+        + '"dias" = detalle por día y empleado; "agrupado" = métricas agrupadas (usa "agrupar"); "semanas" = horas por semana contra la jornada máxima; "huellas" = personas sin huella; "nunca_checado" = activos sin checadas. '
+        + 'Úsalo cuando pidan un reporte, Excel, hoja de cálculo o descarga. Después de crearlo, di qué contiene cada hoja; el enlace de descarga aparece solo.',
+      inputSchema: { type: 'object', additionalProperties: false, required: ['titulo', 'hojas'], properties: {
+        titulo: { type: 'string', description: 'Título del reporte (también nombre del archivo)' },
+        hojas: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['nombre', 'tipo', 'desde', 'hasta', 'empresa_id', 'empleado_id', 'estado', 'agrupar', 'columnas'], properties: {
+          nombre: { type: 'string', description: 'Nombre de la hoja (máx. 31 caracteres)' },
+          tipo: { type: 'string', enum: ['dias', 'agrupado', 'semanas', 'huellas', 'nunca_checado'] },
+          desde: fecha, hasta: fecha,
+          empresa_id: idOpc('Id de empresa o null para todas'), empleado_id: idOpc('Id de empleado o null para todos'),
+          estado: { anyOf: [{ type: 'string', enum: ['A tiempo', 'Retardo', 'Falta', 'Descanso', 'Pendiente', 'Día no laborable', 'Sin registros', 'Festivo', 'Festivo trabajado'] }, { type: 'null' }], description: 'Sólo para tipo "dias": filtrar por estado' },
+          agrupar: { anyOf: [{ type: 'string', enum: ['empleado', 'empresa', 'sede', 'puesto', 'tipo', 'dia', 'semana', 'mes', 'dia_semana'] }, { type: 'null' }], description: 'Sólo para tipo "agrupado"' },
+          columnas: { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'null' }], description: 'Claves de columnas a incluir en orden, o null para todas. dias: fecha, numero, nombre, empresa, entrada, salida, horas, extra, retardo_min, estado, incidencias. agrupado: grupo, personas, laborables, asistencias, faltas, retardos, min_retardo, horas, extra, pct_asistencia, pct_puntualidad, sin_salida, fuera_geocerca, manuales, festivos_trabajados. semanas: semana, numero, nombre, empresa, dias, horas, limite, extra, excede, conformidad.' },
+        } } } } },
+      run2: async (i) => { const a = await generarExcel(i, { empresaForzada, usuario: opts2.usuario }); archivos.push(a); return { ok: true, archivo: a.nombre, hojas: a.hojas }; } }),
     herramienta({ name: 'huellas_pendientes', description: 'Personas sin huella registrada en los checadores (pendiente, sin huella o sin alta).',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false }, run2: () => datos.huellas_pendientes(empresaForzada) }),
   ];
@@ -346,7 +399,7 @@ async function responderClaude(pregunta, historial, { empresaForzada } = {}) {
   }
   if (final.stop_reason === 'refusal') return { motor: 'claude', texto: 'El modelo no pudo responder esta pregunta. Intenta formularla de otra manera.', sugerencias: SUGERENCIAS.slice(0, 4) };
   const texto = final.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
-  return { motor: 'claude', modelo: final.model, texto: texto || 'Sin respuesta.', herramientas: [...new Set(usadas)], sugerencias: [] };
+  return { motor: 'claude', modelo: final.model, texto: texto || 'Sin respuesta.', herramientas: [...new Set(usadas)], archivos, sugerencias: [] };
 }
 
 async function responder(pregunta, historial, opts = {}) {
@@ -368,7 +421,12 @@ async function responder(pregunta, historial, opts = {}) {
       return { ...r, aviso: `Claude no está disponible (${motivo}); respondió el motor local.` };
     }
   }
-  return responderLocal(pregunta, opts);
+  const r = responderLocal(pregunta, opts);
+  if (/excel|xls|hoja de calculo|exporta|descarga/.test(norm(pregunta)) && r.tabla) {
+    const a = await excelDeTabla({ titulo: pregunta.replace(/[¿?]/g, '').slice(0, 60), ...r.tabla }, opts.usuario);
+    return { ...r, archivos: [a] };
+  }
+  return r;
 }
 
-module.exports = { responder, responderLocal, hallazgos, configIA, setConfigIA, buscarEmpleados, SUGERENCIAS };
+module.exports = { excelDeTabla, generarExcel, responder, responderLocal, hallazgos, configIA, setConfigIA, buscarEmpleados, SUGERENCIAS };
