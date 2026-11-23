@@ -52,6 +52,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/arturoretana-procesoseguro/p
 ```
 3. El script instala Node.js 22, la aplicación en `/opt/control-asistencia`, los datos en `/var/lib/control-asistencia`, crea el servicio `control-asistencia` (arranca solo y se reinicia si falla) y muestra la dirección y la contraseña de `admin`.
 
+Si se olvida la contraseña de `admin` (no borra datos): `npm run restablecer-admin` (en Windows `npm.cmd run restablecer-admin`; en el servidor, desde `/opt/control-asistencia` como usuario `asistencia`).
+
 Actualizar a la última versión de GitHub:
 ```bash
 bash /opt/control-asistencia/deploy/actualizar.sh

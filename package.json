@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server.js",
-    "probar-zk": "node --disable-warning=ExperimentalWarning scripts/probar-zk.js"
+    "probar-zk": "node --disable-warning=ExperimentalWarning scripts/probar-zk.js",
+    "restablecer-admin": "node --disable-warning=ExperimentalWarning scripts/restablecer-admin.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.12.0",
